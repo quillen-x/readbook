@@ -731,11 +731,32 @@ class KatbookEpubReaderState extends State<KatbookEpubReader> {
           ),
         // Content - either scroll mode or page mode
         Expanded(
-          child: _readingMode == ReadingMode.page
-              ? _buildPageModeContent(context, theme, paragraphs)
-              : _buildScrollModeContent(context, theme, paragraphs),
+          child: SelectionArea(
+            contextMenuBuilder: _buildCopyOnlyContextMenu,
+            child: _readingMode == ReadingMode.page
+                ? _buildPageModeContent(context, theme, paragraphs)
+                : _buildScrollModeContent(context, theme, paragraphs),
+          ),
         ),
       ],
+    );
+  }
+
+  Widget _buildCopyOnlyContextMenu(
+    BuildContext context,
+    SelectableRegionState selectableRegionState,
+  ) {
+    final copyItems = selectableRegionState.contextMenuButtonItems
+        .where((item) => item.type == ContextMenuButtonType.copy)
+        .toList();
+
+    if (copyItems.isEmpty || copyItems.first.onPressed == null) {
+      return const SizedBox.shrink();
+    }
+
+    return _ReaderCopyContextMenu(
+      anchor: selectableRegionState.contextMenuAnchors.primaryAnchor,
+      onCopy: copyItems.first.onPressed!,
     );
   }
 
@@ -895,5 +916,55 @@ class KatbookEpubReaderState extends State<KatbookEpubReader> {
       // Internal link - try to navigate
       debugPrint('Internal link tapped: $href');
     }
+  }
+}
+
+class _ReaderCopyContextMenu extends StatelessWidget {
+  const _ReaderCopyContextMenu({
+    required this.anchor,
+    required this.onCopy,
+  });
+
+  final Offset anchor;
+  final VoidCallback onCopy;
+
+  static const _screenPadding = 8.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final paddingAbove = MediaQuery.paddingOf(context).top + _screenPadding;
+    final localAdjustment = Offset(_screenPadding, paddingAbove);
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        _screenPadding,
+        paddingAbove,
+        _screenPadding,
+        _screenPadding,
+      ),
+      child: CustomSingleChildLayout(
+        delegate: DesktopTextSelectionToolbarLayoutDelegate(
+          anchor: anchor - localAdjustment,
+        ),
+        child: Material(
+          elevation: 4,
+          shadowColor: Colors.black26,
+          borderRadius: BorderRadius.circular(8),
+          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.96),
+          child: InkWell(
+            onTap: onCopy,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              child: Text(
+                '复制',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

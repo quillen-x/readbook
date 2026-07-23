@@ -65,10 +65,12 @@ class ReaderHoverTitleBar extends StatefulWidget {
     super.key,
     required this.title,
     required this.themeData,
+    this.onClose,
   });
 
   final String title;
   final ReaderThemeData themeData;
+  final VoidCallback? onClose;
 
   @override
   State<ReaderHoverTitleBar> createState() => _ReaderHoverTitleBarState();
@@ -87,7 +89,7 @@ class _ReaderHoverTitleBarState extends State<ReaderHoverTitleBar> {
         onEnter: (_) => setState(() => _hovering = true),
         onExit: (_) => setState(() => _hovering = false),
         child: SizedBox(
-          height: 44.h,
+          height: 64.h,
           child: AnimatedOpacity(
             opacity: _hovering ? 1 : 0,
             duration: const Duration(milliseconds: 180),
@@ -96,29 +98,81 @@ class _ReaderHoverTitleBarState extends State<ReaderHoverTitleBar> {
               alignment: Alignment.topCenter,
               child: Padding(
                 padding: EdgeInsets.only(top: 10.h),
-                child: Material(
-                  elevation: 1,
-                  shadowColor: Colors.black26,
-                  color: widget.themeData.backgroundColor.withValues(alpha: 0.94),
-                  borderRadius: BorderRadius.circular(6.r),
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: 480.w),
-                      child: Text(
-                        widget.title,
-                        style: TextStyle(
-                          color: widget.themeData.textColor,
-                          fontSize: 13.sp,
-                          fontWeight: FontWeight.w600,
+                child: widget.onClose != null
+                    ? Tooltip(
+                        message: '',
+                        child: _TitleBarContent(
+                          title: widget.title,
+                          themeData: widget.themeData,
+                          onTap: widget.onClose,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
+                      )
+                    : _TitleBarContent(
+                        title: widget.title,
+                        themeData: widget.themeData,
                       ),
-                    ),
-                  ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TitleBarContent extends StatelessWidget {
+  const _TitleBarContent({
+    required this.title,
+    required this.themeData,
+    this.onTap,
+  });
+
+  final String title;
+  final ReaderThemeData themeData;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8.r),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: themeData.backgroundColor.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(8.r),
+            border: Border.all(
+              color: themeData.textColor.withValues(alpha: 0.14),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.14),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 4,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: 560.w),
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: themeData.textColor,
+                  fontSize: 27.sp,
+                  fontWeight: FontWeight.w100,
+                  height: 1.2,
                 ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
               ),
             ),
           ),

@@ -159,10 +159,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         _controller.currentPosition?.paragraphIndex ?? -1;
     final screenSize = MediaQuery.sizeOf(context);
 
-    return GestureDetector(
-      onDoubleTap: widget.onClose,
-      behavior: HitTestBehavior.translucent,
-      child: Stack(
+    return Stack(
         clipBehavior: Clip.none,
         children: [
           Row(
@@ -229,6 +226,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ReaderHoverTitleBar(
             title: widget.book.displayTitle,
             themeData: themeData,
+            onClose: widget.onClose,
           ),
           if (_showQuickSettings)
             Positioned(
@@ -252,7 +250,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             ),
           ),
         ],
-      ),
     );
   }
 }
