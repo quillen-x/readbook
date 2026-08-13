@@ -41,6 +41,22 @@ class DownloadResult {
   final List<String> trace;
 }
 
+class CategoryCatalogDownloadResult {
+  const CategoryCatalogDownloadResult({
+    required this.bookCount,
+    required this.coverSuccess,
+    required this.coverFailed,
+    required this.coverSkipped,
+    required this.catalogPath,
+  });
+
+  final int bookCount;
+  final int coverSuccess;
+  final int coverFailed;
+  final int coverSkipped;
+  final String catalogPath;
+}
+
 class _ResolvedDownloadTarget {
   const _ResolvedDownloadTarget({
     required this.uri,
@@ -89,6 +105,214 @@ class OnlineBookService {
       catalog: parseBookList(html, Uri.parse(url)),
       tags: includeTags ? parseDushupaiTags(html) : const <Map<String, String>>[],
     );
+  }
+
+  int parseCategoryMaxPage(
+    String html, {
+    required String type,
+    required String category,
+  }) {
+    var maxPage = 1;
+    final re = RegExp(
+      'book-$type-${RegExp.escape(category)}-(\\d+)\\.html',
+      caseSensitive: false,
+    );
+    for (final m in re.allMatches(html)) {
+      final n = int.tryParse(m.group(1) ?? '') ?? 1;
+      if (n > maxPage && n < 10000) {
+        maxPage = n;
+      }
+    }
+    return maxPage;
+  }
+
+  Future<List<Map<String, String>>> fetchAllCategoryBooks({
+    required String category,
+    required String type,
+    String? sourceUrl,
+    void Function(int page, int maxPage, int found)? onPage,
+  }) async {
+    final books = <Map<String, String>>[];
+    final seen = <String>{};
+    var maxPage = 1;
+    var page = 1;
+
+    while (page <= maxPage && page <= 500) {
+      final url = buildDushupaiListUrl(
+        type: type,
+        category: category.trim(),
+        page: page,
+        sourceUrl: sourceUrl,
+      );
+      final resp = await http.get(Uri.parse(url), headers: defaultHeaders());
+      if (resp.statusCode != 200) {
+        throw Exception('读取第 $page 页失败：HTTP ${resp.statusCode}');
+      }
+      final html = decodeBody(resp);
+      if (page == 1) {
+        maxPage = parseCategoryMaxPage(html, type: type, category: category.trim());
+      }
+      final catalog = parseBookList(html, Uri.parse(url));
+      var added = 0;
+      for (final book in catalog) {
+        final key = (book['url'] ?? book['title'] ?? '').trim();
+        if (key.isEmpty || seen.contains(key)) continue;
+        seen.add(key);
+        books.add(book);
+        added += 1;
+      }
+      if (catalog.length >= 20 && page >= maxPage && page < 500) {
+        maxPage = page + 1;
+      }
+      onPage?.call(page, maxPage, books.length);
+      if (catalog.isEmpty || added == 0) break;
+      page += 1;
+      if (page <= maxPage) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+    }
+    return books;
+  }
+
+  Future<CategoryCatalogDownloadResult> downloadCategoryNamesAndCovers({
+    required String category,
+    required String type,
+    String? sourceUrl,
+    required String categoryFolderName,
+    required String categoryTitle,
+    void Function(int page, int maxPage, int found)? onPage,
+    void Function(int done, int total, String title)? onCover,
+  }) async {
+    final books = await fetchAllCategoryBooks(
+      category: category,
+      type: type,
+      sourceUrl: sourceUrl,
+      onPage: onPage,
+    );
+    final categoryDir = await resolveWritableDownloadDir(
+      subFolder: categoryFolderName,
+    );
+    final coverDir = Directory(p.join(categoryDir.path, 'covers'));
+    if (!coverDir.existsSync()) {
+      coverDir.createSync(recursive: true);
+    }
+    final catalogFile = File(p.join(coverDir.path, 'catalog.json'));
+
+    var coverSuccess = 0;
+    var coverFailed = 0;
+    var coverSkipped = 0;
+    final total = books.length;
+    final existingByName = <String, String>{};
+    for (final f in coverDir.listSync().whereType<File>()) {
+      final name = p.basename(f.path);
+      if (name == 'catalog.json' || name.startsWith('.') || f.lengthSync() <= 0) {
+        continue;
+      }
+      existingByName[p.basenameWithoutExtension(f.path)] = name;
+    }
+
+    Future<void> writeCatalog() async {
+      final data = {
+        'category': category,
+        'title': categoryTitle,
+        'updatedAt': DateTime.now().toIso8601String(),
+        'count': books.length,
+        'books': books
+            .map(
+              (b) => {
+                'title': b['title'] ?? '',
+                'url': b['url'] ?? '',
+                'coverUrl': b['cover'] ?? '',
+                if ((b['coverFile'] ?? '').isNotEmpty) 'coverFile': b['coverFile'],
+              },
+            )
+            .toList(),
+      };
+      await catalogFile.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(data),
+        flush: true,
+      );
+    }
+
+    await writeCatalog();
+
+    for (var i = 0; i < books.length; i++) {
+      final book = books[i];
+      final title = (book['title'] ?? '未命名').trim();
+      onCover?.call(i + 1, total, title);
+      final coverUrl = (book['cover'] ?? '').trim();
+      if (coverUrl.isEmpty) {
+        coverSkipped += 1;
+        continue;
+      }
+      final baseName = sanitizePathComponent(normalizeBookTitle(title));
+      final existingName = existingByName[baseName];
+      if (existingName != null) {
+        book['coverFile'] = existingName;
+        coverSkipped += 1;
+        continue;
+      }
+      try {
+        final saved = await _downloadCoverImage(
+          url: coverUrl,
+          destDir: coverDir,
+          baseName: baseName,
+        );
+        book['coverFile'] = p.basename(saved.path);
+        existingByName[baseName] = book['coverFile']!;
+        coverSuccess += 1;
+      } catch (e) {
+        debugPrint('$_tracePrefix cover failed: $title $e');
+        coverFailed += 1;
+      }
+    }
+
+    await writeCatalog();
+    return CategoryCatalogDownloadResult(
+      bookCount: books.length,
+      coverSuccess: coverSuccess,
+      coverFailed: coverFailed,
+      coverSkipped: coverSkipped,
+      catalogPath: catalogFile.path,
+    );
+  }
+
+  Future<File> _downloadCoverImage({
+    required String url,
+    required Directory destDir,
+    required String baseName,
+  }) async {
+    final resp = await http.get(
+      Uri.parse(url),
+      headers: {
+        ...defaultHeaders(),
+        'Referer': 'https://www.dushupai.com/',
+        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      },
+    );
+    if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
+      throw Exception('封面下载失败：HTTP ${resp.statusCode}');
+    }
+    final ext = _coverExtension(
+      url: url,
+      contentType: resp.headers['content-type'] ?? '',
+    );
+    final file = File(p.join(destDir.path, '$baseName$ext'));
+    await file.writeAsBytes(resp.bodyBytes, flush: true);
+    return file;
+  }
+
+  String _coverExtension({required String url, required String contentType}) {
+    final ct = contentType.toLowerCase();
+    if (ct.contains('png')) return '.png';
+    if (ct.contains('webp')) return '.webp';
+    if (ct.contains('gif')) return '.gif';
+    if (ct.contains('jpeg') || ct.contains('jpg')) return '.jpg';
+    final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
+    if (path.endsWith('.png')) return '.png';
+    if (path.endsWith('.webp')) return '.webp';
+    if (path.endsWith('.gif')) return '.gif';
+    return '.jpg';
   }
 
   Future<BookDetailData> fetchBookDetail(String url) async {

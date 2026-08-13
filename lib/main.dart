@@ -17,7 +17,7 @@ import 'theme/app_theme.dart';
 const Size kMobileDesignSize = Size(440, 956);
 
 /// macOS 窗口尺寸
-const Size kMacWindowSize = Size(491 * 1.5, 856);
+const Size kMacWindowSize = Size(491, 900);
 
 bool get _isDesktop =>
     !kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux);

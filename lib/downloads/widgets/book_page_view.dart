@@ -27,11 +27,13 @@ class BookPageView extends StatelessWidget {
     required this.errorText,
     required this.catalog,
     required this.onTagTap,
+    required this.onTagLongPress,
     required this.onPrevPage,
     required this.onNextPage,
     required this.onDownloadCurrentPage,
     required this.onOpenBook,
     this.cardBackgroundOpacity = 0.5,
+    this.batchLabel = '批量下载',
   });
 
   final TextEditingController passwordController;
@@ -54,11 +56,13 @@ class BookPageView extends StatelessWidget {
   final String? errorText;
   final List<Map<String, String>> catalog;
   final ValueChanged<Map<String, String>> onTagTap;
+  final ValueChanged<Map<String, String>> onTagLongPress;
   final VoidCallback onPrevPage;
   final VoidCallback onNextPage;
   final VoidCallback onDownloadCurrentPage;
   final ValueChanged<Map<String, String>> onOpenBook;
   final double cardBackgroundOpacity;
+  final String batchLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -90,11 +94,11 @@ class BookPageView extends StatelessWidget {
     final textStyles = context.appText;
 
     return SizedBox(
-      width: 180.w,
+      width: 120.w,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (isLoading || isBookLoading || isDownloading)
+          if (isLoading || isBookLoading || isDownloading || isBatchDownloading)
             Padding(
               padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
               child: LinearProgressIndicator(
@@ -116,18 +120,27 @@ class BookPageView extends StatelessWidget {
                       final tag = tags[i];
                       final slug = tag['slug'] ?? '';
                       final title = tag['title'] ?? slug;
-                      final selected = slug == selectedCategory &&
-                          (tag['type'] ?? 'category') == selectedType;
+                      final selected = slug == selectedCategory && (tag['type'] ?? 'category') == selectedType;
                       return Material(
-                        color: selected
-                            ? colorScheme.primaryContainer.withValues(alpha: 0.55)
-                            : Colors.transparent,
+                        color: selected ? colorScheme.primaryContainer.withValues(alpha: 0.55) : Colors.transparent,
                         borderRadius: BorderRadius.circular(8.r),
                         child: InkWell(
                           borderRadius: BorderRadius.circular(8.r),
                           onTap: () {
                             if (isLoading) return;
                             onTagTap(tag);
+                          },
+                          onLongPress: () {
+                            if (isLoading || isBatchDownloading || isDownloading) {
+                              return;
+                            }
+                            onTagLongPress(tag);
+                          },
+                          onSecondaryTap: () {
+                            if (isLoading || isBatchDownloading || isDownloading) {
+                              return;
+                            }
+                            onTagLongPress(tag);
                           },
                           child: Container(
                             padding: EdgeInsets.symmetric(
@@ -137,18 +150,14 @@ class BookPageView extends StatelessWidget {
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(8.r),
                               border: Border.all(
-                                color: selected
-                                    ? colorScheme.primary.withValues(alpha: 0.35)
-                                    : Colors.transparent,
+                                color: selected ? colorScheme.primary.withValues(alpha: 0.35) : Colors.transparent,
                               ),
                             ),
                             child: Text(
                               title,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
-                              style: selected
-                                  ? textStyles.sidebarTagSelected
-                                  : textStyles.sidebarTag,
+                              style: selected ? textStyles.sidebarTagSelected : textStyles.sidebarTag,
                             ),
                           ),
                         ),
@@ -237,7 +246,7 @@ class BookPageView extends StatelessWidget {
             ),
           if (isBatchDownloading) SizedBox(height: 6.h),
           Text(
-            '批量下载：$batchDone/$batchTotal，成功 $batchSuccess，失败 $batchFailed，跳过 $batchSkipped'
+            '$batchLabel：$batchDone/$batchTotal，成功 $batchSuccess，失败 $batchFailed，跳过 $batchSkipped'
             '${batchCurrentTitle.isNotEmpty ? '，当前：$batchCurrentTitle' : ''}',
             style: textStyles.batchProgress,
           ),
@@ -245,12 +254,7 @@ class BookPageView extends StatelessWidget {
             SizedBox(
               height: 56.h,
               child: ListView(
-                children: batchLogs
-                    .take(6)
-                    .toList()
-                    .reversed
-                    .map((e) => Text(e, style: textStyles.batchLog))
-                    .toList(),
+                children: batchLogs.take(6).toList().reversed.map((e) => Text(e, style: textStyles.batchLog)).toList(),
               ),
             ),
         ],
@@ -268,33 +272,64 @@ class BookPageView extends StatelessWidget {
         color: colorScheme.surfaceContainerLow,
         border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
       ),
-      child: Row(
+      child: Wrap(
+        alignment: WrapAlignment.start,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12.w,
+        runSpacing: 8.h,
         children: [
-          Text('共 ${catalog.length} 本', style: textStyles.bottomBarMeta),
-          const Spacer(),
-          OutlinedButton(
-            onPressed: isLoading ||
-                    isBatchDownloading ||
-                    isDownloading ||
-                    catalog.isEmpty
+          _barButton(
+            context: context,
+            label: isBatchDownloading ? '批量下载中...' : '下载当前页',
+            onPressed: isLoading || isBatchDownloading || isDownloading || catalog.isEmpty
                 ? null
                 : onDownloadCurrentPage,
-            child: Text(isBatchDownloading ? '批量下载中...' : '下载当前页'),
           ),
-          SizedBox(width: 12.w),
-          OutlinedButton(
+          _barButton(
+            context: context,
+            label: '上一页',
             onPressed: isLoading || selectedPage <= 1 ? null : onPrevPage,
-            child: const Text('上一页'),
           ),
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12.w),
-            child: Text('第 $selectedPage 页', style: textStyles.bottomBarPage),
-          ),
-          OutlinedButton(
+          Text('第 $selectedPage 页', style: textStyles.bottomBarPage),
+          _barButton(
+            context: context,
+            label: '下一页',
             onPressed: isLoading ? null : onNextPage,
-            child: const Text('下一页'),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _barButton({
+    required BuildContext context,
+    required String label,
+    required VoidCallback? onPressed,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final enabled = onPressed != null;
+    final radius = BorderRadius.circular(8.r);
+
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          border: Border.all(
+            color: enabled
+                ? colorScheme.outline
+                : colorScheme.outlineVariant.withValues(alpha: 0.6),
+          ),
+        ),
+        child: Text(
+          label,
+          style: context.appText.bottomBarMeta.copyWith(
+            color: enabled
+                ? colorScheme.primary
+                : colorScheme.onSurface.withValues(alpha: 0.38),
+          ),
+        ),
       ),
     );
   }

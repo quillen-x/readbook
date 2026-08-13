@@ -33,6 +33,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
   int _batchSkipped = 0;
   String _batchCurrentTitle = '';
   List<String> _batchLogs = [];
+  String _batchLabel = '批量下载';
   Set<String> _downloadedBookKeys = <String>{};
   static const String _tracePrefix = '[BookScraperTrace]';
 
@@ -218,6 +219,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     );
     setState(() {
       _isBatchDownloading = true;
+      _batchLabel = '批量下载';
       _batchTotal = books.length;
       _batchDone = 0;
       _batchSuccess = 0;
@@ -390,6 +392,120 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     _fetchDushupaiBooks();
   }
 
+  String _tagDisplayName(Map<String, String> tag) {
+    final raw = (tag['title'] ?? tag['slug'] ?? '该分类').trim();
+    return raw.replaceAll(RegExp(r'\s*\(\d+\)\s*$'), '').trim();
+  }
+
+  Future<void> _onTagLongPress(Map<String, String> tag) async {
+    if (_isBatchDownloading || _isDownloading || _isLoading) return;
+    final name = _tagDisplayName(tag);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('下载分类目录'),
+        content: Text('将下载「$name」下所有书名和封面图，不会下载电子书。是否继续？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('开始下载'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _downloadCategoryCatalog(tag);
+  }
+
+  Future<void> _downloadCategoryCatalog(Map<String, String> tag) async {
+    if (_isBatchDownloading || _isDownloading) return;
+    final slug = (tag['slug'] ?? '').trim();
+    if (slug.isEmpty) return;
+    final type = tag['type'] ?? 'category';
+    final name = _tagDisplayName(tag);
+    final categoryDirName = _bookService.currentCategoryFolderName(
+      tags: _dushupaiTags,
+      selectedCategory: slug,
+      selectedType: type,
+    );
+
+    setState(() {
+      _isBatchDownloading = true;
+      _batchLabel = '同步封面';
+      _batchTotal = 0;
+      _batchDone = 0;
+      _batchSuccess = 0;
+      _batchFailed = 0;
+      _batchSkipped = 0;
+      _batchCurrentTitle = '正在获取「$name」书目...';
+      _batchLogs = [];
+    });
+
+    try {
+      final result = await _bookService.downloadCategoryNamesAndCovers(
+        category: slug,
+        type: type,
+        sourceUrl: tag['url'],
+        categoryFolderName: categoryDirName,
+        categoryTitle: name,
+        onPage: (page, maxPage, found) {
+          if (!mounted) return;
+          setState(() {
+            _batchTotal = found;
+            _batchDone = found;
+            _batchCurrentTitle = '正在获取第 $page/$maxPage 页，已找到 $found 本';
+          });
+        },
+        onCover: (done, total, title) {
+          if (!mounted) return;
+          setState(() {
+            _batchTotal = total;
+            _batchDone = done;
+            _batchCurrentTitle = title;
+          });
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _batchDone = result.bookCount;
+        _batchTotal = result.bookCount;
+        _batchSuccess = result.coverSuccess;
+        _batchFailed = result.coverFailed;
+        _batchSkipped = result.coverSkipped;
+        _batchCurrentTitle = '';
+        _batchLogs = [
+          '书目 ${result.bookCount} 本，已保存到 ${result.catalogPath}',
+        ];
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '「$name」目录已保存：书名 ${result.bookCount}，封面成功 ${result.coverSuccess}，失败 ${result.coverFailed}，跳过 ${result.coverSkipped}',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _batchLogs = ['同步失败：$e'];
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('同步分类目录失败：$e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isBatchDownloading = false;
+          _batchCurrentTitle = '';
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(appSettingsProvider);
@@ -413,9 +529,11 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       batchSkipped: _batchSkipped,
       batchCurrentTitle: _batchCurrentTitle,
       batchLogs: _batchLogs,
+      batchLabel: _batchLabel,
       errorText: _error,
       catalog: _catalog,
       onTagTap: _onTagTap,
+      onTagLongPress: _onTagLongPress,
       onPrevPage: () {
         setState(() => _selectedDushupaiPage -= 1);
         _fetchDushupaiBooks();
