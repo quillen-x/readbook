@@ -53,7 +53,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       _selectedDushupaiTagUrl =
           'https://www.dushupai.com/book-category-xiaoshuo.html';
       _selectedDushupaiPage = 1;
-      _fetchDushupaiBooks(refreshTags: true);
+      _fetchDushupaiBooks(refreshTags: true, selectFirstTag: true);
     });
   }
 
@@ -63,7 +63,10 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     super.dispose();
   }
 
-  Future<void> _fetchDushupaiBooks({bool refreshTags = false}) async {
+  Future<void> _fetchDushupaiBooks({
+    bool refreshTags = false,
+    bool selectFirstTag = false,
+  }) async {
     setState(() {
       _isLoading = true;
       _error = null;
@@ -77,18 +80,38 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
         includeTags: refreshTags,
       );
 
+      var reloadFirstTag = false;
       setState(() {
         if (refreshTags && result.tags.isNotEmpty) {
           _dushupaiTags = result.tags;
-          if (!_dushupaiTags
-              .any((e) => e['slug'] == _selectedDushupaiCategory)) {
-            _selectedDushupaiCategory = _dushupaiTags.first['slug'];
-            _selectedDushupaiType = _dushupaiTags.first['type'] ?? 'category';
-            _selectedDushupaiTagUrl = _dushupaiTags.first['url'];
+          final first = _dushupaiTags.first;
+          final firstSlug = first['slug'];
+          final firstType = first['type'] ?? 'category';
+          final firstUrl = first['url'];
+          final selectedInTags = _dushupaiTags.any(
+            (e) =>
+                e['slug'] == _selectedDushupaiCategory &&
+                (e['type'] ?? 'category') == _selectedDushupaiType,
+          );
+          final alreadyFirst = _selectedDushupaiCategory == firstSlug &&
+              _selectedDushupaiType == firstType &&
+              _selectedDushupaiTagUrl == firstUrl;
+          if (selectFirstTag || !selectedInTags) {
+            _selectedDushupaiCategory = firstSlug;
+            _selectedDushupaiType = firstType;
+            _selectedDushupaiTagUrl = firstUrl;
+            _selectedDushupaiPage = 1;
+            reloadFirstTag = !alreadyFirst;
           }
         }
-        _catalog = result.catalog;
+        if (!reloadFirstTag) {
+          _catalog = result.catalog;
+        }
       });
+      if (reloadFirstTag) {
+        await _fetchDushupaiBooks();
+        return;
+      }
       await _refreshDownloadedMarks();
     } catch (e) {
       setState(() => _error = e.toString());
@@ -180,6 +203,11 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
         categoryFolderName: categoryDirName,
         preferredBookTitle: preferredBookTitle,
         keepOriginalZip: false,
+        onProgress: (received, total) {
+          onStatusChange?.call(
+            _downloadProgressLabel(preferredBookTitle ?? '下载中', received, total),
+          );
+        },
       );
 
       if (!mounted) return;
@@ -263,6 +291,12 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
             categoryFolderName: categoryDirName,
             preferredBookTitle: title,
             keepOriginalZip: false,
+            onProgress: (received, total) {
+              if (!mounted) return;
+              setState(() {
+                _batchCurrentTitle = _downloadProgressLabel(title, received, total);
+              });
+            },
           );
           if (!mounted) return;
           _printTrace(result.trace);
@@ -315,6 +349,14 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
         ),
       ),
     );
+  }
+
+  String _downloadProgressLabel(String title, int received, int? total) {
+    if (total != null && total > 0) {
+      final pct = ((received / total) * 100).clamp(0, 100).toStringAsFixed(0);
+      return '$title  $pct%';
+    }
+    return title;
   }
 
   bool _isBookDownloadedByTitle(String title) {

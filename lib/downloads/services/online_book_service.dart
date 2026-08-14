@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
@@ -76,6 +77,8 @@ class OnlineBookService {
   static Future<void> _ctfileDownloadGate = Future.value();
   static DateTime? _lastCtfileDownloadCompletedAt;
   static const Duration _ctfileMinInterval = Duration(seconds: 15);
+  static const Duration _httpConnectTimeout = Duration(seconds: 30);
+  static const Duration _httpIdleTimeout = Duration(seconds: 45);
 
   static const String ctfileLimitErrorMessage =
       '城通网盘免费账号仅支持同时 1 个下载任务。'
@@ -334,9 +337,14 @@ class OnlineBookService {
     required String categoryFolderName,
     String? preferredBookTitle,
     bool keepOriginalZip = true,
+    void Function(int received, int? total)? onProgress,
   }) {
     return _runSerializedCtfileDownload(() async {
-      final resolved = await _resolveDownloadTarget(rawUrl: url, password: password);
+      final resolved = await _resolveDownloadTarget(
+        rawUrl: url,
+        password: password,
+        onProgress: onProgress,
+      );
       final sourceName = extractFileName(
         resolved.uri,
         resolved.response.headers['content-disposition'],
@@ -670,9 +678,124 @@ class OnlineBookService {
     }
   }
 
+  Future<http.StreamedResponse> _sendGet(
+    http.Client client,
+    Uri uri,
+    Map<String, String> headers,
+  ) {
+    final req = http.Request('GET', uri)..headers.addAll(headers);
+    return client.send(req).timeout(
+      _httpConnectTimeout,
+      onTimeout: () => throw TimeoutException('连接超时：$uri'),
+    );
+  }
+
+  Future<http.Response> _readHttpResponse(
+    http.StreamedResponse streamed, {
+    required void Function(String message) pushTrace,
+    required String label,
+    void Function(int received, int? total)? onProgress,
+  }) async {
+    final contentType = (streamed.headers['content-type'] ?? '').toLowerCase();
+    final total = streamed.contentLength ??
+        int.tryParse(streamed.headers['content-length'] ?? '') ??
+        _fileSizeFromCdnUri(streamed.request?.url);
+    pushTrace('$label http ${streamed.statusCode} ct=$contentType len=${total ?? '?'}');
+
+    final reportProgress = _shouldReportDownloadProgress(
+      statusCode: streamed.statusCode,
+      contentType: contentType,
+      contentLength: total,
+      uri: streamed.request?.url,
+    );
+    var lastTraceAt = DateTime.fromMillisecondsSinceEpoch(0);
+    final bytes = await _collectBytes(
+      streamed,
+      onProgress: reportProgress
+          ? (received, expected) {
+              onProgress?.call(received, expected);
+              final now = DateTime.now();
+              if (now.difference(lastTraceAt) >= const Duration(seconds: 2)) {
+                lastTraceAt = now;
+                pushTrace(
+                  '$label progress ${_formatByteSize(received)}/${expected == null ? '?' : _formatByteSize(expected)}',
+                );
+              }
+            }
+          : null,
+    );
+    return http.Response.bytes(
+      bytes,
+      streamed.statusCode,
+      request: streamed.request,
+      headers: streamed.headers,
+    );
+  }
+
+  bool _shouldReportDownloadProgress({
+    required int statusCode,
+    required String contentType,
+    required int? contentLength,
+    Uri? uri,
+  }) {
+    if (statusCode != 200) return false;
+    if (contentLength != null && contentLength > 256 * 1024) return true;
+    if (contentType.contains('octet-stream') ||
+        contentType.contains('zip') ||
+        contentType.contains('epub') ||
+        contentType.contains('pdf')) {
+      return true;
+    }
+    return uri != null && _looksLikeBookFileUri(uri);
+  }
+
+  int? _fileSizeFromCdnUri(Uri? uri) {
+    if (uri == null) return null;
+    final chk = uri.queryParameters['chk'] ?? '';
+    final dash = chk.lastIndexOf('-');
+    if (dash < 0 || dash == chk.length - 1) return null;
+    return int.tryParse(chk.substring(dash + 1));
+  }
+
+  Future<List<int>> _collectBytes(
+    http.StreamedResponse streamed, {
+    void Function(int received, int? total)? onProgress,
+  }) async {
+    final total = streamed.contentLength ??
+        int.tryParse(streamed.headers['content-length'] ?? '') ??
+        _fileSizeFromCdnUri(streamed.request?.url);
+    final builder = BytesBuilder(copy: false);
+    var received = 0;
+    try {
+      await for (final chunk in streamed.stream.timeout(_httpIdleTimeout)) {
+        builder.add(chunk);
+        received += chunk.length;
+        onProgress?.call(received, total);
+      }
+    } on TimeoutException {
+      throw TimeoutException(
+        '下载中断：已收到 ${_formatByteSize(received)}/'
+        '${total == null ? '?' : _formatByteSize(total)}，'
+        '${_httpIdleTimeout.inSeconds}s 内无新数据',
+      );
+    }
+    return builder.takeBytes();
+  }
+
+  String _formatByteSize(int n) {
+    if (n >= 1024 * 1024) {
+      return '${(n / (1024 * 1024)).toStringAsFixed(1)}MB';
+    }
+    if (n >= 1024) {
+      return '${(n / 1024).toStringAsFixed(0)}KB';
+    }
+    return '${n}B';
+  }
+
   Future<_ResolvedDownloadTarget> _resolveDownloadTarget({
     required String rawUrl,
     required String password,
+    void Function(int received, int? total)? onProgress,
   }) async {
     final client = http.Client();
     final trace = <String>[];
@@ -689,18 +812,15 @@ class OnlineBookService {
 
       if (_isDirectCdnFileUri(current)) {
         pushTrace('[fast-path] direct file url detected -> $current');
-        final req = http.Request('GET', current)
-          ..headers.addAll({
-            ...defaultHeaders(),
-            'Accept': '*/*',
-          });
-        final streamed = await client.send(req);
-        final bytes = await streamed.stream.toBytes();
-        final resp = http.Response.bytes(
-          bytes,
-          streamed.statusCode,
-          request: streamed.request,
-          headers: streamed.headers,
+        final streamed = await _sendGet(client, current, {
+          ...defaultHeaders(),
+          'Accept': '*/*',
+        });
+        final resp = await _readHttpResponse(
+          streamed,
+          pushTrace: pushTrace,
+          label: '[fast-path]',
+          onProgress: onProgress,
         );
         if (resp.statusCode != 200) {
           pushTrace('[fast-path] http ${resp.statusCode} at ${streamed.request?.url ?? current}');
@@ -731,14 +851,12 @@ class OnlineBookService {
         if (hostLower.contains('ctfile.com') || hostLower.contains('dushupai.com')) {
           headers['Referer'] = current.origin;
         }
-        final req = http.Request('GET', current)..headers.addAll(headers);
-        final streamed = await client.send(req);
-        final bytes = await streamed.stream.toBytes();
-        final resp = http.Response.bytes(
-          bytes,
-          streamed.statusCode,
-          request: streamed.request,
-          headers: streamed.headers,
+        final streamed = await _sendGet(client, current, headers);
+        final resp = await _readHttpResponse(
+          streamed,
+          pushTrace: pushTrace,
+          label: '[$depth]',
+          onProgress: onProgress,
         );
         if (resp.statusCode != 200) {
           final reqUri = streamed.request?.url ?? current;
@@ -774,7 +892,6 @@ class OnlineBookService {
         final contentType = (resp.headers['content-type'] ?? '').toLowerCase();
         final contentDisposition = (resp.headers['content-disposition'] ?? '').toLowerCase();
         final requestUri = streamed.request?.url ?? current;
-        trace.add('[$depth] ${requestUri.host} ct=$contentType');
         final looksLikeTextPage = contentType.contains('text/html') ||
             contentType.contains('text/plain') ||
             contentType.contains('javascript') ||
