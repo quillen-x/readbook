@@ -12,6 +12,7 @@ import 'app/app_messenger.dart';
 import 'providers/app_providers.dart';
 import 'screens/app_shell.dart';
 import 'theme/app_theme.dart';
+import 'utils/system_proxy.dart';
 
 /// iPhone 17 Pro Max 逻辑分辨率
 const Size kMobileDesignSize = Size(440, 956);
@@ -33,6 +34,10 @@ Size get appDesignSize {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   GoogleFonts.config.allowRuntimeFetching = false;
+
+  if (!kIsWeb) {
+    await applySystemProxyOverrides();
+  }
 
   if (!kIsWeb && Platform.isMacOS) {
     await FilePicker.skipEntitlementsChecks();

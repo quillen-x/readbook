@@ -79,6 +79,7 @@ class OnlineBookService {
   static const Duration _ctfileMinInterval = Duration(seconds: 15);
   static const Duration _httpConnectTimeout = Duration(seconds: 30);
   static const Duration _httpIdleTimeout = Duration(seconds: 45);
+  static const Duration _pageFetchTimeout = Duration(seconds: 15);
 
   static const String ctfileLimitErrorMessage =
       '城通网盘免费账号仅支持同时 1 个下载任务。'
@@ -98,16 +99,30 @@ class OnlineBookService {
       page: safePage,
       sourceUrl: sourceUrl,
     );
-    final resp = await http.get(Uri.parse(url), headers: defaultHeaders());
-    if (resp.statusCode != 200) {
-      throw Exception('读取失败：HTTP ${resp.statusCode}');
-    }
+    try {
+      final resp = await http
+          .get(Uri.parse(url), headers: defaultHeaders())
+          .timeout(_pageFetchTimeout);
+      if (resp.statusCode != 200) {
+        throw Exception('读取失败：HTTP ${resp.statusCode}');
+      }
 
-    final html = decodeBody(resp);
-    return FetchBooksResult(
-      catalog: parseBookList(html, Uri.parse(url)),
-      tags: includeTags ? parseDushupaiTags(html) : const <Map<String, String>>[],
-    );
+      final html = decodeBody(resp);
+      return FetchBooksResult(
+        catalog: parseBookList(html, Uri.parse(url)),
+        tags: includeTags ? parseDushupaiTags(html) : const <Map<String, String>>[],
+      );
+    } on TimeoutException {
+      throw Exception(
+        '无法连接读书派（请求超时）。请检查网络，或稍后重试。',
+      );
+    } on SocketException catch (e) {
+      throw Exception(
+        '无法连接读书派：${e.message.isNotEmpty ? e.message : '网络不通'}。请检查网络后重试。',
+      );
+    } on http.ClientException catch (e) {
+      throw Exception('无法连接读书派：${e.message}。请检查网络后重试。');
+    }
   }
 
   int parseCategoryMaxPage(
@@ -319,16 +334,28 @@ class OnlineBookService {
   }
 
   Future<BookDetailData> fetchBookDetail(String url) async {
-    final resp = await http.get(Uri.parse(url), headers: defaultHeaders());
-    if (resp.statusCode != 200) {
-      throw Exception('获取书籍详情失败：HTTP ${resp.statusCode}');
+    try {
+      final resp = await http
+          .get(Uri.parse(url), headers: defaultHeaders())
+          .timeout(_pageFetchTimeout);
+      if (resp.statusCode != 200) {
+        throw Exception('获取书籍详情失败：HTTP ${resp.statusCode}');
+      }
+      final parsed = parseBookDetail(decodeBody(resp), Uri.parse(url));
+      return BookDetailData(
+        title: parsed['title']?.toString() ?? '',
+        intro: parsed['intro']?.toString() ?? '',
+        links: List<String>.from(parsed['links'] as List<String>),
+      );
+    } on TimeoutException {
+      throw Exception('无法连接读书派（请求超时）。请检查网络后重试。');
+    } on SocketException catch (e) {
+      throw Exception(
+        '无法连接读书派：${e.message.isNotEmpty ? e.message : '网络不通'}。请检查网络后重试。',
+      );
+    } on http.ClientException catch (e) {
+      throw Exception('无法连接读书派：${e.message}。请检查网络后重试。');
     }
-    final parsed = parseBookDetail(decodeBody(resp), Uri.parse(url));
-    return BookDetailData(
-      title: parsed['title']?.toString() ?? '',
-      intro: parsed['intro']?.toString() ?? '',
-      links: List<String>.from(parsed['links'] as List<String>),
-    );
   }
 
   Future<DownloadResult> downloadFile({
@@ -659,7 +686,12 @@ class OnlineBookService {
 
   Map<String, String> defaultHeaders() {
     return const {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36',
+      'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+          'AppleWebKit/537.36 (KHTML, like Gecko) '
+          'Chrome/131.0.0.0 Safari/537.36',
+      'Accept':
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     };
   }

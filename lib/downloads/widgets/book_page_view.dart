@@ -32,6 +32,7 @@ class BookPageView extends StatelessWidget {
     required this.onNextPage,
     required this.onDownloadCurrentPage,
     required this.onOpenBook,
+    this.onRetry,
     this.cardBackgroundOpacity = 0.5,
     this.batchLabel = '批量下载',
   });
@@ -61,6 +62,7 @@ class BookPageView extends StatelessWidget {
   final VoidCallback onNextPage;
   final VoidCallback onDownloadCurrentPage;
   final ValueChanged<Map<String, String>> onOpenBook;
+  final VoidCallback? onRetry;
   final double cardBackgroundOpacity;
   final String batchLabel;
 
@@ -170,6 +172,46 @@ class BookPageView extends StatelessWidget {
     );
   }
 
+  Widget _buildUnreachableState(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textStyles = context.appText;
+
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 24.w),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.cloud_off_outlined,
+            size: 48.sp,
+            color: colorScheme.outline,
+          ),
+          SizedBox(height: 12.h),
+          Text(
+            '读书派暂时无法访问',
+            style: textStyles.sidebarTagSelected.copyWith(
+              color: colorScheme.onSurface,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          SizedBox(height: 8.h),
+          Text(
+            '请检查网络、切换线路或代理后重试',
+            style: textStyles.sidebarEmpty,
+            textAlign: TextAlign.center,
+          ),
+          if (onRetry != null) ...[
+            SizedBox(height: 16.h),
+            FilledButton.tonal(
+              onPressed: onRetry,
+              child: const Text('重新加载'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildMainPanel(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textStyles = context.appText;
@@ -178,11 +220,19 @@ class BookPageView extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (errorText != null)
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+          Material(
             color: colorScheme.errorContainer.withValues(alpha: 0.45),
-            child: Text(errorText!, style: textStyles.errorBanner),
+            child: InkWell(
+              onTap: isLoading ? null : onRetry,
+              child: Container(
+                width: double.infinity,
+                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                child: Text(
+                  onRetry == null ? errorText! : '$errorText\n点击此处重试',
+                  style: textStyles.errorBanner,
+                ),
+              ),
+            ),
           ),
         Expanded(
           child: catalog.isEmpty
@@ -192,7 +242,9 @@ class BookPageView extends StatelessWidget {
                           strokeWidth: 2.w,
                           color: colorScheme.primary,
                         )
-                      : Text('暂无数据', style: textStyles.sidebarEmpty),
+                      : errorText != null
+                          ? _buildUnreachableState(context)
+                          : Text('暂无数据', style: textStyles.sidebarEmpty),
                 )
               : GridView.builder(
                   padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 36.h),

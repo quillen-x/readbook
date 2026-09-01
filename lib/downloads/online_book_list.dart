@@ -63,6 +63,12 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     super.dispose();
   }
 
+  String _formatFetchError(Object error) {
+    final text = error.toString();
+    const prefix = 'Exception: ';
+    return text.startsWith(prefix) ? text.substring(prefix.length) : text;
+  }
+
   Future<void> _fetchDushupaiBooks({
     bool refreshTags = false,
     bool selectFirstTag = false,
@@ -114,7 +120,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       }
       await _refreshDownloadedMarks();
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = _formatFetchError(e));
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -586,6 +592,10 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       },
       onDownloadCurrentPage: _downloadCurrentPageBooks,
       onOpenBook: _openBookDetail,
+      onRetry: () => _fetchDushupaiBooks(
+        refreshTags: _dushupaiTags.isEmpty,
+        selectFirstTag: _dushupaiTags.isEmpty,
+      ),
     );
   }
 }
