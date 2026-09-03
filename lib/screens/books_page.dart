@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import '../models/book_item.dart';
-import '../models/sidebar_section.dart';
 import '../providers/app_providers.dart';
 import '../widgets/book_cover_card.dart';
 import '../widgets/home_background.dart';
@@ -44,8 +43,7 @@ class _BooksPageState extends ConsumerState<BooksPage> {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('加载失败: $e')),
         data: (_) {
-          final books =
-              ref.read(bookServiceProvider).sortedBooks(BookSort.lastRead);
+          final books = ref.watch(booksProvider);
           final screenHeight = MediaQuery.sizeOf(context).height;
 
           return Stack(

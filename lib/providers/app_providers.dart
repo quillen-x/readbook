@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/app_settings.dart';
 import '../models/book_item.dart';
+import '../models/sidebar_section.dart';
 import '../services/book_service.dart';
 import '../services/settings_service.dart';
 
@@ -15,7 +16,7 @@ final libraryInitProvider = FutureProvider<void>((ref) async {
 
 final booksProvider = Provider<List<BookItem>>((ref) {
   ref.watch(libraryInitProvider);
-  return ref.read(bookServiceProvider).books;
+  return ref.read(bookServiceProvider).sortedBooks(BookSort.lastRead);
 });
 
 final activeBookProvider =
@@ -25,7 +26,13 @@ class ActiveBookNotifier extends Notifier<BookItem?> {
   @override
   BookItem? build() => null;
 
-  void open(BookItem book) => state = book;
+  void open(BookItem book) {
+    state = book;
+    Future.microtask(() async {
+      await ref.read(bookServiceProvider).recordBookOpened(book.id);
+      ref.invalidate(libraryInitProvider);
+    });
+  }
 
   void close() => state = null;
 }

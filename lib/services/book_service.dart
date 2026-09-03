@@ -183,6 +183,16 @@ class BookService {
     await _saveAnnotations();
   }
 
+  Future<void> recordBookOpened(String id) async {
+    await initialize();
+
+    final index = _books.indexWhere((book) => book.id == id);
+    if (index == -1) return;
+
+    _books[index] = _books[index].copyWith(lastOpenedAt: DateTime.now());
+    await _saveLibrary();
+  }
+
   Future<void> updateProgress({
     required String id,
     required ReadingPosition position,
@@ -206,9 +216,14 @@ class BookService {
     switch (sort) {
       case BookSort.lastRead:
         list.sort((a, b) {
-          final aTime = a.lastOpenedAt ?? a.addedAt;
-          final bTime = b.lastOpenedAt ?? b.addedAt;
-          return bTime.compareTo(aTime);
+          final aOpened = a.lastOpenedAt;
+          final bOpened = b.lastOpenedAt;
+          if (aOpened != null && bOpened != null) {
+            return bOpened.compareTo(aOpened);
+          }
+          if (aOpened != null) return -1;
+          if (bOpened != null) return 1;
+          return b.addedAt.compareTo(a.addedAt);
         });
         break;
       case BookSort.lastAdded:
