@@ -22,9 +22,14 @@ class BooksPage extends ConsumerStatefulWidget {
 
 class _BooksPageState extends ConsumerState<BooksPage> {
   bool _showDownloads = false;
+  bool _showSettings = false;
 
   void _toggleDownloads() {
     setState(() => _showDownloads = !_showDownloads);
+  }
+
+  void _toggleSettings() {
+    setState(() => _showSettings = !_showSettings);
   }
 
   @override
@@ -41,6 +46,7 @@ class _BooksPageState extends ConsumerState<BooksPage> {
         data: (_) {
           final books =
               ref.read(bookServiceProvider).sortedBooks(BookSort.lastRead);
+          final screenHeight = MediaQuery.sizeOf(context).height;
 
           return Stack(
             fit: StackFit.expand,
@@ -72,9 +78,33 @@ class _BooksPageState extends ConsumerState<BooksPage> {
                 right: 0,
                 bottom: 0,
                 child: HoverSettingsFab(
-                  onPressed: () => showSettingsDialog(context),
+                  active: _showSettings,
+                  onPressed: _toggleSettings,
                 ),
               ),
+              if (_showSettings) ...[
+                Positioned.fill(
+                  child: GestureDetector(
+                    onTap: _toggleSettings,
+                    child: ColoredBox(
+                      color: Theme.of(context).colorScheme.scrim.withValues(
+                            alpha: 0.38,
+                          ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: screenHeight * 0.55),
+                    child: AppSettingsPanel(
+                      onClose: _toggleSettings,
+                    ),
+                  ),
+                ),
+              ],
             ],
           );
         },

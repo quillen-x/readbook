@@ -1,5 +1,4 @@
 import 'package:epubx/epubx.dart';
-import 'package:flutter/foundation.dart';
 
 /// Parses CSS from EPUB files and provides style lookup.
 class EpubCssParser {
@@ -19,8 +18,6 @@ class EpubCssParser {
         _parseCss(content);
       }
     }
-
-    debugPrint('🎨 Parsed ${_classStyles.length} CSS classes, ${_tagStyles.length} tag styles');
   }
 
   /// Parse CSS content.

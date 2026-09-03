@@ -80,7 +80,6 @@ class KatbookEpubController extends ChangeNotifier {
       _isLoaded = true;
       notifyListeners();
 
-      debugPrint('📚 Loaded: ${_book?.Title}');
       return true;
     } catch (e, stack) {
       _loadingError = e.toString();

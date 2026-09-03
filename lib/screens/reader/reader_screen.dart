@@ -39,7 +39,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   @override
   void initState() {
     super.initState();
+    _progress = widget.book.progressPercent / 100;
+    _controller.addListener(_syncProgressFromController);
     _loadBook();
+  }
+
+  void _syncProgressFromController() {
+    final position = _controller.currentPosition;
+    if (position == null || position.totalParagraphs == 0) return;
+
+    final next = position.progressPercent / 100;
+    if ((next - _progress).abs() < 0.001) return;
+    if (!mounted) return;
+    setState(() => _progress = next);
   }
 
   Future<void> _loadBook() async {
@@ -71,6 +83,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       position: position,
     );
     ref.invalidate(libraryInitProvider);
+  }
+
+  void _toggleQuickSettings() {
+    setState(() => _showQuickSettings = !_showQuickSettings);
   }
 
   String? _readerFontFamily(ReaderFontFamily family) {
@@ -111,6 +127,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   @override
   void dispose() {
+    _controller.removeListener(_syncProgressFromController);
     _controller.dispose();
     super.dispose();
   }
@@ -157,58 +174,72 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final themeData = ReaderThemeData.fromTheme(readerTheme);
     final currentParagraphIndex =
         _controller.currentPosition?.paragraphIndex ?? -1;
-    final screenSize = MediaQuery.sizeOf(context);
+    final screenHeight = MediaQuery.sizeOf(context).height;
 
     return Stack(
         clipBehavior: Clip.none,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              ClipRect(
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeInOut,
-                  width: showToc ? 200.w : 0,
-                  child: SizedBox(
-                    width: 200.w,
-                    child: ReaderTocPanel(
-                      chapters: _controller.tableOfContents,
-                      currentParagraphIndex: currentParagraphIndex,
-                      themeData: themeData,
-                      bookTitle: _controller.title,
-                      bookAuthor: _controller.author,
-                      onChapterTap: (chapter) {
-                        _readerKey.currentState?.jumpToChapter(chapter);
-                      },
-                    ),
-                  ),
+          Positioned.fill(
+            child: KatbookEpubReader(
+              key: _readerKey,
+              controller: _controller,
+              showAppBar: false,
+              initialTheme: readerTheme,
+              initialFontSize: settings.fontSize,
+              initialReadingMode: ReadingMode.scroll,
+              contentWidthPercent: settings.readerContentWidthPercent
+                  .clamp(0.55, 1.0),
+              initialPosition: widget.book.readingPosition,
+              onPositionChanged: _saveProgress,
+              onProgressChanged: (value) {
+                setState(() => _progress = value);
+              },
+              paragraphBuilder: _buildParagraph,
+            ),
+          ),
+          if (showToc)
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () {
+                  ref.read(appSettingsProvider.notifier).update(
+                        settings.copyWith(showTocPanel: false),
+                      );
+                },
+                child: ColoredBox(
+                  color: Theme.of(context).colorScheme.scrim.withValues(
+                        alpha: 0.28,
+                      ),
                 ),
               ),
-              Expanded(
-                child: KatbookEpubReader(
-                  key: _readerKey,
-                  controller: _controller,
-                  showAppBar: false,
-                  initialTheme: readerTheme,
-                  initialFontSize: settings.fontSize,
-                  initialReadingMode: ReadingMode.scroll,
-                  contentWidthPercent: settings.readerContentWidthPercent
-                      .clamp(0.55, 1.0),
-                  initialPosition: widget.book.readingPosition,
-                  onPositionChanged: _saveProgress,
-                  onProgressChanged: (value) {
-                    setState(() => _progress = value);
-                  },
-                  paragraphBuilder: _buildParagraph,
-                ),
+            ),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeInOut,
+            left: showToc ? 0 : -220.w,
+            top: 0,
+            bottom: 0,
+            width: 220.w,
+            child: IgnorePointer(
+              ignoring: !showToc,
+              child: ReaderTocPanel(
+                chapters: _controller.tableOfContents,
+                currentParagraphIndex: currentParagraphIndex,
+                themeData: themeData,
+                bookTitle: _controller.title,
+                bookAuthor: _controller.author,
+                onChapterTap: (chapter) {
+                  _readerKey.currentState?.jumpToChapter(chapter);
+                  ref.read(appSettingsProvider.notifier).update(
+                        settings.copyWith(showTocPanel: false),
+                      );
+                },
               ),
-            ],
+            ),
           ),
           AnimatedPositioned(
             duration: const Duration(milliseconds: 220),
             curve: Curves.easeInOut,
-            left: (showToc ? 200.w : 0) - 11.w,
+            left: showToc ? 220.w - 11.w : 0,
             top: 0,
             bottom: 0,
             child: Center(
@@ -228,27 +259,46 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             themeData: themeData,
             onClose: widget.onClose,
           ),
-          if (_showQuickSettings)
-            Positioned(
-              right: 12.w,
-              bottom: 88.h,
-              width: screenSize.width * 0.5,
-              height: screenSize.height * 0.5,
-              child: ReaderQuickSettingsPanel(
-                onClose: () => setState(() => _showQuickSettings = false),
-              ),
-            ),
           Positioned(
-            right: 0,
+            left: 0,
             bottom: 0,
-            child: ReaderCornerControls(
-              progress: _progress,
+            child: ReaderSettingsFab(
               settingsActive: _showQuickSettings,
-              onToggleSettings: () {
-                setState(() => _showQuickSettings = !_showQuickSettings);
-              },
+              onToggleSettings: _toggleQuickSettings,
             ),
           ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: ReaderBottomProgressBar(
+              progress: _progress,
+              themeData: themeData,
+            ),
+          ),
+          if (_showQuickSettings) ...[
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: _toggleQuickSettings,
+                child: ColoredBox(
+                  color: Theme.of(context).colorScheme.scrim.withValues(
+                        alpha: 0.38,
+                      ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: screenHeight * 0.55),
+                child: ReaderQuickSettingsPanel(
+                  onClose: _toggleQuickSettings,
+                ),
+              ),
+            ),
+          ],
         ],
     );
   }

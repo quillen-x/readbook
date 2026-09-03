@@ -5,9 +5,11 @@ class HoverSettingsFab extends StatefulWidget {
   const HoverSettingsFab({
     super.key,
     required this.onPressed,
+    this.active = false,
   });
 
   final VoidCallback onPressed;
+  final bool active;
 
   @override
   State<HoverSettingsFab> createState() => _HoverSettingsFabState();
@@ -15,6 +17,8 @@ class HoverSettingsFab extends StatefulWidget {
 
 class _HoverSettingsFabState extends State<HoverSettingsFab> {
   bool _visible = false;
+
+  bool get _shown => _visible || widget.active;
 
   @override
   Widget build(BuildContext context) {
@@ -26,15 +30,17 @@ class _HoverSettingsFabState extends State<HoverSettingsFab> {
       child: Padding(
         padding: EdgeInsets.all(20.w),
         child: AnimatedOpacity(
-          opacity: _visible ? 1 : 0,
+          opacity: _shown ? 1 : 0,
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOut,
           child: IgnorePointer(
-            ignoring: !_visible,
+            ignoring: !_shown,
             child: Material(
               elevation: 2,
               shadowColor: Colors.black26,
-              color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.92),
+              color: widget.active
+                  ? colorScheme.primaryContainer
+                  : colorScheme.surfaceContainerHighest.withValues(alpha: 0.92),
               shape: const CircleBorder(),
               child: InkWell(
                 customBorder: const CircleBorder(),
@@ -45,7 +51,9 @@ class _HoverSettingsFabState extends State<HoverSettingsFab> {
                   child: Icon(
                     Icons.settings_outlined,
                     size: 20.sp,
-                    color: colorScheme.onSurface,
+                    color: widget.active
+                        ? colorScheme.onPrimaryContainer
+                        : colorScheme.onSurface,
                   ),
                 ),
               ),

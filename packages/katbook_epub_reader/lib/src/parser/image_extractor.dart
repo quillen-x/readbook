@@ -1,6 +1,5 @@
 import 'dart:typed_data';
 import 'package:epubx/epubx.dart';
-import 'package:flutter/foundation.dart';
 
 /// Utility class for extracting images from EPUB files.
 class EpubImageExtractor {
@@ -38,7 +37,6 @@ class EpubImageExtractor {
       }
     }
 
-    debugPrint('🖼️ Extracted ${imageData.length} image entries');
     return imageData;
   }
 }

@@ -13,6 +13,17 @@ extension AppThemeModeX on AppThemeMode {
         return '护眼';
     }
   }
+
+  Color get previewColor {
+    switch (this) {
+      case AppThemeMode.light:
+        return const Color(0xFFFAFAFA);
+      case AppThemeMode.dark:
+        return const Color(0xFF1A1A1A);
+      case AppThemeMode.eyeCare:
+        return const Color(0xFFF5F0E6);
+    }
+  }
 }
 
 enum ReaderThemeMode { light, sepia, dark }

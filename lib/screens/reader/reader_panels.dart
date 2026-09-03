@@ -6,55 +6,54 @@ import 'package:katbook_epub_reader/katbook_epub_reader.dart';
 import '../../models/app_settings.dart';
 import '../../providers/app_providers.dart';
 
-class ReaderProgressIndicator extends StatelessWidget {
-  const ReaderProgressIndicator({super.key, required this.progress});
+class ReaderBottomProgressBar extends StatelessWidget {
+  const ReaderBottomProgressBar({
+    super.key,
+    required this.progress,
+    required this.themeData,
+  });
 
   final double progress;
+  final ReaderThemeData themeData;
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final percent = (progress.clamp(0, 1) * 100).round();
+    final value = progress.clamp(0.0, 1.0);
+    final barHeight = 2.h.clamp(2, 3).toDouble();
+    final trackColor = themeData.textColor.withValues(alpha: 0.22);
+    final fillColor = themeData.accentColor;
 
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        CircularProgressIndicator(
-          value: progress.clamp(0, 1),
-          strokeWidth: 2.5.w,
-          backgroundColor: colorScheme.outlineVariant.withValues(alpha: 0.4),
-          color: colorScheme.primary,
-        ),
-        Text(
-          '$percent%',
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                fontSize: 9.sp,
-              ),
-        ),
-      ],
-    );
-  }
-}
-
-class ReaderProgressFab extends StatelessWidget {
-  const ReaderProgressFab({super.key, required this.progress});
-
-  final double progress;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Material(
-      elevation: 2,
-      shadowColor: Colors.black26,
-      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.92),
-      shape: const CircleBorder(),
+    return IgnorePointer(
       child: SizedBox(
-        width: 34.w,
-        height: 34.w,
-        child: ReaderProgressIndicator(progress: progress),
+        height: barHeight,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: trackColor,
+                    border: Border(
+                      top: BorderSide(
+                        color: themeData.textColor.withValues(alpha: 0.14),
+                      ),
+                    ),
+                  ),
+                ),
+                if (value > 0)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: SizedBox(
+                      width: constraints.maxWidth * value,
+                      height: barHeight,
+                      child: ColoredBox(color: fillColor),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -249,18 +248,16 @@ class ReaderTocPanel extends ConsumerWidget {
     final fontFamily = settings.fontFamily.familyName;
 
     return Material(
+      elevation: 8,
+      shadowColor: Colors.black26,
       color: themeData.backgroundColor,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.horizontal(right: Radius.circular(12.r)),
+      ),
       child: SizedBox(
-        width: 200.w,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            border: Border(
-              right: BorderSide(
-                color: themeData.textColor.withValues(alpha: 0.12),
-              ),
-            ),
-          ),
-          child: TableOfContentsWidget(
+        width: 220.w,
+        child: TableOfContentsWidget(
           chapters: chapters,
           currentParagraphIndex: currentParagraphIndex,
           themeData: themeData,
@@ -274,7 +271,6 @@ class ReaderTocPanel extends ConsumerWidget {
           fontSize: settings.fontSize,
           lineHeight: settings.lineHeight,
           fontWeight: settings.fontWeight.weight,
-        ),
         ),
       ),
     );

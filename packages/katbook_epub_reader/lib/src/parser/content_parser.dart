@@ -1,6 +1,5 @@
 import 'package:epubx/epubx.dart';
 import 'package:html/dom.dart' as dom;
-import 'package:flutter/foundation.dart';
 
 import '../models/chapter_node.dart';
 import '../models/paragraph_element.dart';
@@ -39,10 +38,6 @@ class EpubContentParser {
     _parseHtmlFiles();
     _addFrontMatter(); // Add content before chapters
     _processChapters();
-    
-    debugPrint('📑 TOC: ${_tableOfContents.length} root chapters');
-    debugPrint('📑 Flat: ${_flatChapters.length} total chapters');
-    debugPrint('📄 Paragraphs: ${_paragraphs.length}');
     
     return ParseResult(
       tableOfContents: _tableOfContents,
@@ -121,8 +116,6 @@ class EpubContentParser {
         _usedFileKeys.add(matchingKey);
       }
       
-      debugPrint('📖 Adding front matter: $fileName (${elements.length} elements)');
-      
       for (final element in elements) {
         _paragraphs.add(ParagraphElement(
           element: element,
@@ -159,8 +152,6 @@ class EpubContentParser {
         _parsedFiles[fileName] = EpubHtmlParser.parseHtmlToElements(content);
       }
     }
-    
-    debugPrint('📄 Parsed ${_parsedFiles.length} HTML files');
   }
 
   /// Process chapters in TOC order.
@@ -225,8 +216,6 @@ class EpubContentParser {
   }) {
     final startIndex = paragraphIndex;
     final fileName = chapter.ContentFileName;
-    
-    debugPrint('  ${"  " * depth}📖 ${chapter.Title}');
 
     // Get elements for this chapter
     final elements = _getElementsForChapter(chapter);
