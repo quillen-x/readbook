@@ -583,6 +583,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       onTagTap: _onTagTap,
       onTagLongPress: _onTagLongPress,
       onPrevPage: () {
+        if (_selectedDushupaiPage <= 1) return;
         setState(() => _selectedDushupaiPage -= 1);
         _fetchDushupaiBooks();
       },

@@ -24,7 +24,12 @@ class _BooksPageState extends ConsumerState<BooksPage> {
   bool _showSettings = false;
 
   void _toggleDownloads() {
-    setState(() => _showDownloads = !_showDownloads);
+    setState(() {
+      _showDownloads = !_showDownloads;
+      if (_showDownloads) {
+        _showSettings = false;
+      }
+    });
   }
 
   void _toggleSettings() {
@@ -72,15 +77,16 @@ class _BooksPageState extends ConsumerState<BooksPage> {
                   onPressed: _toggleDownloads,
                 ),
               ),
-              Positioned(
-                right: 0,
-                bottom: 0,
-                child: HoverSettingsFab(
-                  active: _showSettings,
-                  onPressed: _toggleSettings,
+              if (!_showDownloads)
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: HoverSettingsFab(
+                    active: _showSettings,
+                    onPressed: _toggleSettings,
+                  ),
                 ),
-              ),
-              if (_showSettings) ...[
+              if (_showSettings && !_showDownloads) ...[
                 Positioned.fill(
                   child: GestureDetector(
                     onTap: _toggleSettings,

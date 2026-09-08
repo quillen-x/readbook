@@ -4,6 +4,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../../theme/app_text_styles.dart';
 import '../../widgets/book_cover_card.dart';
 
+
 class BookPageView extends StatelessWidget {
   const BookPageView({
     super.key,
@@ -317,70 +318,123 @@ class BookPageView extends StatelessWidget {
   Widget _buildBottomBar(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textStyles = context.appText;
+    final canPrev = !isLoading && selectedPage > 1;
+    final canNext = !isLoading && catalog.isNotEmpty;
+    final canBatch = !isLoading &&
+        !isBatchDownloading &&
+        !isDownloading &&
+        catalog.isNotEmpty;
 
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+      padding: EdgeInsets.fromLTRB(12.w, 8.h, 12.w, 8.h),
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerLow,
         border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
       ),
-      child: Wrap(
-        alignment: WrapAlignment.start,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 12.w,
-        runSpacing: 8.h,
+      child: Row(
         children: [
-          _barButton(
-            context: context,
-            label: isBatchDownloading ? '批量下载中...' : '下载当前页',
-            onPressed: isLoading || isBatchDownloading || isDownloading || catalog.isEmpty
-                ? null
-                : onDownloadCurrentPage,
+          FilledButton.tonalIcon(
+            onPressed: canBatch ? onDownloadCurrentPage : null,
+            icon: Icon(
+              isBatchDownloading
+                  ? Icons.hourglass_top_rounded
+                  : Icons.download_rounded,
+              size: 16.sp,
+            ),
+            label: Text(
+              isBatchDownloading ? '下载中...' : '下载本页',
+              style: textStyles.bottomBarMeta.copyWith(
+                color: canBatch
+                    ? colorScheme.onSecondaryContainer
+                    : colorScheme.onSurface.withValues(alpha: 0.38),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            style: FilledButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+              minimumSize: Size(0, 32.h),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
           ),
-          _barButton(
-            context: context,
-            label: '上一页',
-            onPressed: isLoading || selectedPage <= 1 ? null : onPrevPage,
-          ),
-          Text('第 $selectedPage 页', style: textStyles.bottomBarPage),
-          _barButton(
-            context: context,
-            label: '下一页',
-            onPressed: isLoading ? null : onNextPage,
-          ),
+          const Spacer(),
+          _buildPager(context, canPrev: canPrev, canNext: canNext),
         ],
       ),
     );
   }
 
-  Widget _barButton({
-    required BuildContext context,
-    required String label,
-    required VoidCallback? onPressed,
+  Widget _buildPager(
+    BuildContext context, {
+    required bool canPrev,
+    required bool canNext,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
-    final enabled = onPressed != null;
-    final radius = BorderRadius.circular(8.r);
+    final textStyles = context.appText;
 
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          border: Border.all(
-            color: enabled
-                ? colorScheme.outline
-                : colorScheme.outlineVariant.withValues(alpha: 0.6),
-          ),
+    return Material(
+      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.65),
+      borderRadius: BorderRadius.circular(20.r),
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 2.w, vertical: 2.h),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _pagerIconButton(
+              context: context,
+              icon: Icons.chevron_left_rounded,
+              tooltip: '上一页',
+              enabled: canPrev,
+              onPressed: onPrevPage,
+            ),
+            ConstrainedBox(
+              constraints: BoxConstraints(minWidth: 56.w),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6.w),
+                child: Text(
+                  '$selectedPage',
+                  textAlign: TextAlign.center,
+                  style: textStyles.bottomBarPage.copyWith(
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ),
+            _pagerIconButton(
+              context: context,
+              icon: Icons.chevron_right_rounded,
+              tooltip: '下一页',
+              enabled: canNext,
+              onPressed: onNextPage,
+            ),
+          ],
         ),
-        child: Text(
-          label,
-          style: context.appText.bottomBarMeta.copyWith(
-            color: enabled
-                ? colorScheme.primary
-                : colorScheme.onSurface.withValues(alpha: 0.38),
-          ),
+      ),
+    );
+  }
+
+  Widget _pagerIconButton({
+    required BuildContext context,
+    required IconData icon,
+    required String tooltip,
+    required bool enabled,
+    required VoidCallback onPressed,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return IconButton(
+      onPressed: enabled ? onPressed : null,
+      tooltip: tooltip,
+      icon: Icon(icon, size: 20.sp),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: BoxConstraints.tightFor(width: 32.w, height: 32.h),
+      style: IconButton.styleFrom(
+        foregroundColor: colorScheme.onSurface,
+        disabledForegroundColor: colorScheme.onSurface.withValues(alpha: 0.28),
+        hoverColor: colorScheme.primary.withValues(alpha: 0.08),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16.r),
         ),
       ),
     );
