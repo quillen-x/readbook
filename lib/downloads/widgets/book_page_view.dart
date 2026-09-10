@@ -13,6 +13,7 @@ class BookPageView extends StatelessWidget {
     required this.isBookLoading,
     required this.isDownloading,
     required this.isBatchDownloading,
+    this.isBatchPaused = false,
     required this.tags,
     required this.selectedCategory,
     required this.selectedType,
@@ -46,6 +47,7 @@ class BookPageView extends StatelessWidget {
   final bool isBookLoading;
   final bool isDownloading;
   final bool isBatchDownloading;
+  final bool isBatchPaused;
   final List<Map<String, String>> tags;
   final String? selectedCategory;
   final String selectedType;
@@ -76,106 +78,77 @@ class BookPageView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildSidebar(context),
-                VerticalDivider(
-                  width: 1.w,
-                  thickness: 1.w,
-                  color: Theme.of(context).colorScheme.outlineVariant,
-                ),
-                Expanded(child: _buildMainPanel(context)),
-              ],
-            ),
-          ),
-        ],
-      ),
+      body: _buildMainPanel(context),
     );
   }
 
-  Widget _buildSidebar(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final textStyles = context.appText;
+  String _tagDisplayName(Map<String, String> tag) {
+    final raw = (tag['title'] ?? tag['slug'] ?? '分类').trim();
+    return raw.replaceAll(RegExp(r'\s*\(\d+\)\s*$'), '').trim();
+  }
 
-    return SizedBox(
-      width: 140.w,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (isLoading || isBookLoading)
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
-              child: LinearProgressIndicator(
-                minHeight: 3.h,
-                color: colorScheme.primary,
-                backgroundColor: colorScheme.surfaceContainerHighest,
-              ),
-            ),
-          Expanded(
+  String get _selectedCategoryName {
+    for (final tag in tags) {
+      if ((tag['slug'] ?? '') == selectedCategory &&
+          (tag['type'] ?? 'category') == selectedType) {
+        return _tagDisplayName(tag);
+      }
+    }
+    return '分类';
+  }
+
+  Future<void> _openCategoryDialog(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        final colorScheme = Theme.of(dialogContext).colorScheme;
+        final textStyles = dialogContext.appText;
+        return AlertDialog(
+          title: const Text('选择分类'),
+          content: SizedBox(
+            width: 520.w,
             child: tags.isEmpty
-                ? Center(
-                    child: Text('暂无分类', style: textStyles.sidebarEmpty),
-                  )
-                : ListView.separated(
-                    padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 20.h),
-                    itemCount: tags.length,
-                    separatorBuilder: (_, __) => SizedBox(height: 4.h),
-                    itemBuilder: (_, i) {
-                      final tag = tags[i];
-                      final slug = tag['slug'] ?? '';
-                      final title = tag['title'] ?? slug;
-                      final selected = slug == selectedCategory && (tag['type'] ?? 'category') == selectedType;
-                      return Material(
-                        color: selected ? colorScheme.primaryContainer.withValues(alpha: 0.55) : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8.r),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(8.r),
-                          onTap: () {
-                            if (isLoading) return;
-                            onTagTap(tag);
-                          },
-                          onLongPress: () {
-                            if (isLoading || isBatchDownloading || isDownloading) {
-                              return;
-                            }
-                            onTagLongPress(tag);
-                          },
-                          onSecondaryTap: () {
-                            if (isLoading || isBatchDownloading || isDownloading) {
-                              return;
-                            }
-                            onTagLongPress(tag);
-                          },
-                          child: Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 12.w,
-                              vertical: 10.h,
-                            ),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(8.r),
-                              border: Border.all(
-                                color: selected ? colorScheme.primary.withValues(alpha: 0.35) : Colors.transparent,
-                              ),
-                            ),
-                            child: Text(
-                              title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: selected ? textStyles.sidebarTagSelected : textStyles.sidebarTag,
-                            ),
+                ? Text('暂无分类', style: textStyles.sidebarEmpty)
+                : SingleChildScrollView(
+                    child: Wrap(
+                      spacing: 4.w,
+                      runSpacing: 4.h,
+                      children: [
+                        for (final tag in tags)
+                          _CategoryTagChip(
+                            tag: tag,
+                            selected: (tag['slug'] ?? '') == selectedCategory &&
+                                (tag['type'] ?? 'category') == selectedType,
+                            enabled: !isLoading,
+                            canLongPress: !isLoading &&
+                                !isBatchDownloading &&
+                                !isDownloading,
+                            onTap: (selected) {
+                              Navigator.of(dialogContext).pop();
+                              onTagTap(selected);
+                            },
+                            onLongPress: (selected) {
+                              Navigator.of(dialogContext).pop();
+                              onTagLongPress(selected);
+                            },
                           ),
-                        ),
-                      );
-                    },
+                      ],
+                    ),
                   ),
           ),
-        ],
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(
+                '关闭',
+                style: textStyles.bottomBarMeta.copyWith(
+                  color: colorScheme.primary,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -226,6 +199,12 @@ class BookPageView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (isLoading || isBookLoading)
+          LinearProgressIndicator(
+            minHeight: 2.h,
+            color: colorScheme.primary,
+            backgroundColor: colorScheme.surfaceContainerHighest,
+          ),
         if (errorText != null)
           Material(
             color: colorScheme.errorContainer.withValues(alpha: 0.45),
@@ -254,7 +233,7 @@ class BookPageView extends StatelessWidget {
                           : Text('暂无数据', style: textStyles.sidebarEmpty),
                 )
               : GridView.builder(
-                  padding: EdgeInsets.fromLTRB(12.w, 20.h, 8.w, 20.h),
+                  padding: EdgeInsets.fromLTRB(12.w, 16.h, 12.w, 20.h),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 4,
                     mainAxisSpacing: 12.h,
@@ -285,7 +264,8 @@ class BookPageView extends StatelessWidget {
   Widget _buildBatchProgress(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textStyles = context.appText;
-    final showCurrentProgress = isBatchDownloading && batchCurrentTitle.isNotEmpty;
+    final showCurrentProgress =
+        (isBatchDownloading || isBatchPaused) && batchCurrentTitle.isNotEmpty;
 
     return Container(
       padding: EdgeInsets.fromLTRB(16.w, 14.h, 16.w, 14.h),
@@ -298,14 +278,18 @@ class BookPageView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '$batchLabel：$batchDone/$batchTotal，成功 $batchSuccess，失败 $batchFailed，跳过 $batchSkipped',
+            isBatchPaused
+                ? '$batchLabel 已暂停：$batchDone/$batchTotal，成功 $batchSuccess，失败 $batchFailed，跳过 $batchSkipped'
+                : '$batchLabel：$batchDone/$batchTotal，成功 $batchSuccess，失败 $batchFailed，跳过 $batchSkipped',
             style: textStyles.batchProgress,
           ),
           if (showCurrentProgress) ...[
             SizedBox(height: 10.h),
             Text(
               _downloadProgressText(
-                title: batchCurrentTitle,
+                title: isBatchPaused
+                    ? '已暂停 · $batchCurrentTitle'
+                    : batchCurrentTitle,
                 received: downloadReceived,
                 total: downloadTotal,
               ),
@@ -341,11 +325,29 @@ class BookPageView extends StatelessWidget {
     final textStyles = context.appText;
     final canPrev = !isLoading && selectedPage > 1;
     final canNext = !isLoading && catalog.isNotEmpty;
-    final canBatch = !isLoading &&
-        !isBatchDownloading &&
-        !isDownloading &&
-        catalog.isNotEmpty;
+    final isCatalogSync = batchLabel == '同步封面';
+    final downloading =
+        !isCatalogSync && ((isBatchDownloading && !isBatchPaused) || isDownloading);
+    final canPressDownload = !isLoading &&
+        !isCatalogSync &&
+        (downloading || isBatchPaused || catalog.isNotEmpty);
     final showDownloadProgress = isDownloading && !isBatchDownloading;
+    final downloadIcon = isCatalogSync
+        ? Icons.hourglass_top_rounded
+        : isBatchPaused
+            ? Icons.play_arrow_rounded
+            : downloading
+                ? Icons.pause_rounded
+                : Icons.download_rounded;
+    final downloadLabel = isCatalogSync
+        ? '同步中...'
+        : isBatchPaused
+            ? '继续'
+            : downloading
+                ? '暂停'
+                : catalog.isEmpty
+                    ? '下载本页'
+                    : '下载本页（${catalog.length}）';
 
     return Container(
       padding: EdgeInsets.fromLTRB(12.w, 8.h, 12.w, 8.h),
@@ -373,20 +375,38 @@ class BookPageView extends StatelessWidget {
           Row(
             children: [
               FilledButton.tonalIcon(
-                onPressed: canBatch ? onDownloadCurrentPage : null,
-                icon: Icon(
-                  isBatchDownloading
-                      ? Icons.hourglass_top_rounded
-                      : Icons.download_rounded,
-                  size: 16.sp,
-                ),
+                onPressed: canPressDownload ? onDownloadCurrentPage : null,
+                icon: Icon(downloadIcon, size: 16.sp),
                 label: Text(
-                  isBatchDownloading ? '下载中...' : '下载本页',
+                  downloadLabel,
                   style: textStyles.bottomBarMeta.copyWith(
-                    color: canBatch
+                    color: canPressDownload
                         ? colorScheme.onSecondaryContainer
                         : colorScheme.onSurface.withValues(alpha: 0.38),
                     fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  minimumSize: Size(0, 32.h),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+              SizedBox(width: 8.w),
+              FilledButton.tonalIcon(
+                onPressed: () => _openCategoryDialog(context),
+                icon: Icon(Icons.category_outlined, size: 16.sp),
+                label: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: 120.w),
+                  child: Text(
+                    _selectedCategoryName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textStyles.bottomBarMeta.copyWith(
+                      color: colorScheme.onSecondaryContainer,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 style: FilledButton.styleFrom(
@@ -508,3 +528,99 @@ class BookPageView extends StatelessWidget {
     );
   }
 }
+
+class _CategoryTagChip extends StatefulWidget {
+  const _CategoryTagChip({
+    required this.tag,
+    required this.selected,
+    required this.enabled,
+    required this.canLongPress,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  final Map<String, String> tag;
+  final bool selected;
+  final bool enabled;
+  final bool canLongPress;
+  final ValueChanged<Map<String, String>> onTap;
+  final ValueChanged<Map<String, String>> onLongPress;
+
+  @override
+  State<_CategoryTagChip> createState() => _CategoryTagChipState();
+}
+
+class _CategoryTagChipState extends State<_CategoryTagChip> {
+  static final _countSuffix = RegExp(r'\s*\((\d+)\)\s*$');
+
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textStyles = context.appText;
+    final slug = widget.tag['slug'] ?? '';
+    final rawTitle = (widget.tag['title'] ?? slug).trim();
+    final countMatch = _countSuffix.firstMatch(rawTitle);
+    final name = countMatch == null
+        ? rawTitle
+        : rawTitle.substring(0, countMatch.start).trim();
+    final count = countMatch?.group(1);
+    final showCount = _hovered && count != null;
+    final radius = BorderRadius.circular(6.r);
+
+    return Material(
+      color: widget.selected
+          ? colorScheme.primaryContainer.withValues(alpha: 0.55)
+          : Colors.transparent,
+      borderRadius: radius,
+      child: InkWell(
+        borderRadius: radius,
+        onHover: (value) {
+          if (_hovered == value) return;
+          setState(() => _hovered = value);
+        },
+        onTap: widget.enabled ? () => widget.onTap(widget.tag) : null,
+        onLongPress:
+            widget.canLongPress ? () => widget.onLongPress(widget.tag) : null,
+        onSecondaryTap:
+            widget.canLongPress ? () => widget.onLongPress(widget.tag) : null,
+        child: AnimatedSize(
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          alignment: Alignment.centerLeft,
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+            decoration: BoxDecoration(
+              borderRadius: radius,
+              border: Border.all(
+                color: widget.selected
+                    ? colorScheme.primary.withValues(alpha: 0.35)
+                    : Colors.transparent,
+              ),
+            ),
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(text: name),
+                  if (showCount)
+                    TextSpan(
+                      text: '($count)',
+                      style: textStyles.sidebarEmpty,
+                    ),
+                ],
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: widget.selected
+                  ? textStyles.sidebarTagSelected
+                  : textStyles.sidebarTag,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+

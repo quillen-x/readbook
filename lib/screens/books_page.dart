@@ -66,17 +66,26 @@ class _BooksPageState extends ConsumerState<BooksPage> {
                   downloads: const DownloadsPage(),
                 ),
               ),
-              Positioned(
-                left: 0,
-                bottom: 0,
-                child: HoverDownloadFab(
-                  icon: _showDownloads
-                      ? Icons.grid_view_rounded
-                      : Icons.download_outlined,
-                  tooltip: _showDownloads ? '返回书架' : '下载',
-                  onPressed: _toggleDownloads,
+              if (_showDownloads)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: HoverDownloadFab(
+                    icon: Icons.grid_view_rounded,
+                    tooltip: '返回书架',
+                    onPressed: _toggleDownloads,
+                  ),
+                )
+              else
+                Positioned(
+                  left: 0,
+                  bottom: 0,
+                  child: HoverDownloadFab(
+                    icon: Icons.download_outlined,
+                    tooltip: '下载',
+                    onPressed: _toggleDownloads,
+                  ),
                 ),
-              ),
               if (!_showDownloads)
                 Positioned(
                   right: 0,

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/app_providers.dart';
+import '../utils/download_books_paths.dart';
 import 'services/online_book_service.dart';
 import 'widgets/book_detail_dialog.dart';
 import 'widgets/book_page_view.dart';
@@ -24,6 +25,11 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
   bool _isBookLoading = false;
   bool _isDownloading = false;
   bool _isBatchDownloading = false;
+  bool _isBatchPaused = false;
+  bool _batchLoopRunning = false;
+  List<Map<String, String>> _batchBooks = [];
+  int _batchIndex = 0;
+  String _batchCategoryDirName = '';
   String? _error;
   List<String> _lastDownloadTrace = [];
   int _batchTotal = 0;
@@ -62,6 +68,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
 
   @override
   void dispose() {
+    _bookService.requestPause();
     _passwordController.dispose();
     super.dispose();
   }
@@ -129,6 +136,85 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  Future<void> _onOpenBook(Map<String, String> book) async {
+    if ((book['downloaded'] ?? '0') == '1') {
+      await _revealDownloadedBook(book);
+      return;
+    }
+    await _openBookDetail(book);
+  }
+
+  Future<void> _revealDownloadedBook(Map<String, String> book) async {
+    try {
+      var localPath = (book['localPath'] ?? '').trim();
+      if (localPath.isEmpty || !File(localPath).existsSync()) {
+        localPath = await _findDownloadedBookPath(book['title'] ?? '') ?? '';
+      }
+      if (localPath.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未找到本地文件')),
+        );
+        return;
+      }
+      await DownloadBooksPaths.revealFile(localPath);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('无法打开文件夹：$e')),
+      );
+    }
+  }
+
+  Future<String?> _findDownloadedBookPath(String title) async {
+    final key = _bookService.sanitizePathComponent(
+      _bookService.normalizeBookTitle(title.trim()),
+    );
+    if (key.isEmpty) return null;
+    final paths = await _scannedDownloadedBookPaths();
+    return paths[key];
+  }
+
+  Future<Map<String, String>> _scannedDownloadedBookPaths() async {
+    final categoryDirName = _bookService.currentCategoryFolderName(
+      tags: _dushupaiTags,
+      selectedCategory: _selectedDushupaiCategory,
+      selectedType: _selectedDushupaiType,
+    );
+    final dir = await _bookService.resolveWritableDownloadDir(
+      subFolder: categoryDirName,
+    );
+    final files = dir.existsSync()
+        ? dir.listSync().whereType<File>().map((f) => f.path).toList()
+        : <String>[];
+    final keyToPath = <String, String>{};
+    for (final filePath in files) {
+      final base = filePath.split(Platform.pathSeparator).last;
+      if (base.startsWith('.')) continue;
+      final noExt = base.contains('.')
+          ? base.substring(0, base.lastIndexOf('.'))
+          : base;
+      final key = _bookService.sanitizePathComponent(
+        _bookService.normalizeBookTitle(noExt.trim()),
+      );
+      if (key.isEmpty) continue;
+      final existing = keyToPath[key];
+      if (existing == null || _isPreferredBookFile(filePath, existing)) {
+        keyToPath[key] = filePath;
+      }
+    }
+    return keyToPath;
+  }
+
+  bool _isPreferredBookFile(String candidate, String current) {
+    const preferred = ['.epub', '.mobi', '.azw3', '.pdf'];
+    final next = candidate.toLowerCase();
+    final prev = current.toLowerCase();
+    final nextPreferred = preferred.any(next.endsWith);
+    final prevPreferred = preferred.any(prev.endsWith);
+    return nextPreferred && !prevPreferred;
   }
 
   Future<void> _openBookDetail(Map<String, String> book) async {
@@ -202,6 +288,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       _downloadReceived = 0;
       _downloadTotal = null;
     });
+    _bookService.clearPause();
     onStatusChange?.call('正在解析下载链接...');
     try {
       debugPrint('$_tracePrefix start download: $url');
@@ -242,7 +329,13 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
         SnackBar(content: Text('下载完成：${result.filePath}')),
       );
     } catch (e) {
-      if (_bookService.isDownloadSizeSkipped(e)) {
+      if (_bookService.isDownloadPaused(e)) {
+        onStatusChange?.call('已暂停');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已暂停下载')),
+        );
+      } else if (_bookService.isDownloadSizeSkipped(e)) {
         onStatusChange?.call('已跳过');
         if (!mounted) return;
         _printTrace(_lastDownloadTrace);
@@ -272,18 +365,46 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     }
   }
 
-  Future<void> _downloadCurrentPageBooks() async {
+  void _pauseActiveDownload() {
+    _bookService.requestPause();
+    if (!mounted) return;
+    if (_isBatchDownloading) {
+      setState(() => _isBatchPaused = true);
+    }
+  }
+
+  Future<void> _onDownloadButtonPressed() async {
+    if (_isBatchDownloading && _batchLabel == '同步封面') return;
+    if (_isBatchDownloading && !_isBatchPaused) {
+      _pauseActiveDownload();
+      return;
+    }
+    if (_isDownloading && !_isBatchDownloading) {
+      _pauseActiveDownload();
+      return;
+    }
+    if (_isBatchPaused) {
+      await _resumeBatchDownload();
+      return;
+    }
+    await _startBatchDownload();
+  }
+
+  Future<void> _startBatchDownload() async {
     if (_isBatchDownloading || _isDownloading || _catalog.isEmpty) return;
-    final books = List<Map<String, String>>.from(_catalog);
-    final categoryDirName = _bookService.currentCategoryFolderName(
+    _bookService.clearPause();
+    _batchBooks = List<Map<String, String>>.from(_catalog);
+    _batchIndex = 0;
+    _batchCategoryDirName = _bookService.currentCategoryFolderName(
       tags: _dushupaiTags,
       selectedCategory: _selectedDushupaiCategory,
       selectedType: _selectedDushupaiType,
     );
     setState(() {
       _isBatchDownloading = true;
+      _isBatchPaused = false;
       _batchLabel = '批量下载';
-      _batchTotal = books.length;
+      _batchTotal = _batchBooks.length;
       _batchDone = 0;
       _batchSuccess = 0;
       _batchFailed = 0;
@@ -293,116 +414,167 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       _downloadTotal = null;
       _batchLogs = [];
     });
+    await _runBatchDownload();
+  }
 
-    for (var i = 0; i < books.length; i++) {
-      final book = books[i];
-      final title = (book['title'] ?? '未命名').trim();
-      final url = (book['url'] ?? '').trim();
-      setState(() {
-        _batchCurrentTitle = title;
-      });
+  Future<void> _resumeBatchDownload() async {
+    if (!_isBatchPaused || _batchLoopRunning) return;
+    _bookService.clearPause();
+    setState(() => _isBatchPaused = false);
+    await _runBatchDownload();
+  }
 
-      if (_isBookDownloadedByTitle(title)) {
+  Future<void> _runBatchDownload() async {
+    if (_batchLoopRunning) return;
+    _batchLoopRunning = true;
+    final books = _batchBooks;
+    final categoryDirName = _batchCategoryDirName;
+
+    try {
+      for (var i = _batchIndex; i < books.length; i++) {
+        _batchIndex = i;
         if (!mounted) return;
+        if (_bookService.isPauseRequested) {
+          setState(() => _isBatchPaused = true);
+          return;
+        }
+
+        final book = books[i];
+        final title = (book['title'] ?? '未命名').trim();
+        final url = (book['url'] ?? '').trim();
+        setState(() {
+          _batchCurrentTitle = title;
+          _downloadReceived = 0;
+          _downloadTotal = null;
+        });
+
+        if (_isBookDownloadedByTitle(title)) {
+          setState(() {
+            _batchDone += 1;
+            _batchSkipped += 1;
+            _batchLogs.add('${i + 1}. 跳过：$title（已存在）');
+          });
+          _batchIndex = i + 1;
+          continue;
+        }
+
+        var success = false;
+        var skippedOversized = false;
+        var paused = false;
+        Object? lastError;
+        for (var attempt = 1; attempt <= 2; attempt++) {
+          try {
+            if (url.isEmpty) {
+              throw Exception('链接为空');
+            }
+            debugPrint(
+              '$_tracePrefix batch item ${i + 1}/${books.length} attempt $attempt: $url',
+            );
+            final result = await _bookService.downloadFile(
+              url: url,
+              password: _passwordController.text.trim(),
+              categoryFolderName: categoryDirName,
+              preferredBookTitle: title,
+              keepOriginalZip: false,
+              onProgress: (received, total) {
+                if (!mounted) return;
+                setState(() {
+                  _batchCurrentTitle = title;
+                  _downloadReceived = received;
+                  _downloadTotal = total;
+                });
+              },
+            );
+            if (!mounted) return;
+            _printTrace(result.trace);
+            debugPrint('$_tracePrefix 下载源地址: $url');
+            debugPrint('$_tracePrefix 本地保存地址: ${result.filePath}');
+            setState(() {
+              _lastDownloadTrace = result.trace;
+            });
+            success = true;
+            break;
+          } catch (e) {
+            lastError = e;
+            if (_bookService.isDownloadPaused(e)) {
+              paused = true;
+              break;
+            }
+            if (_bookService.isDownloadSizeSkipped(e)) {
+              skippedOversized = true;
+              debugPrint(
+                '$_tracePrefix batch item ${i + 1}/${books.length} skipped oversized: $e',
+              );
+              break;
+            }
+            debugPrint(
+              '$_tracePrefix batch item ${i + 1}/${books.length} failed at attempt $attempt: $e',
+            );
+            if (attempt < 2) {
+              final retryDelay = _bookService.isCtfileLimitError(e)
+                  ? const Duration(seconds: 20)
+                  : const Duration(seconds: 2);
+              try {
+                await _bookService.delayUnlessPaused(retryDelay);
+              } catch (pauseError) {
+                if (_bookService.isDownloadPaused(pauseError)) {
+                  paused = true;
+                  break;
+                }
+                rethrow;
+              }
+            }
+          }
+        }
+
+        if (!mounted) return;
+        if (paused) {
+          setState(() {
+            _isBatchPaused = true;
+            _batchLogs.add('${i + 1}. 暂停：$title');
+          });
+          return;
+        }
+
         setState(() {
           _batchDone += 1;
-          _batchSkipped += 1;
-          _batchLogs.add('${i + 1}. 跳过：$title（已存在）');
+          if (success) {
+            _batchSuccess += 1;
+            _batchLogs.add('${i + 1}. 成功：$title');
+          } else if (skippedOversized) {
+            _batchSkipped += 1;
+            _batchLogs.add('${i + 1}. 跳过：$title（文件过大，上限 20MB）');
+            _downloadReceived = 0;
+            _downloadTotal = null;
+          } else {
+            _batchFailed += 1;
+            _batchLogs.add('${i + 1}. 失败：$title（$lastError）');
+          }
         });
-        continue;
-      }
-
-      var success = false;
-      var skippedOversized = false;
-      Object? lastError;
-      for (var attempt = 1; attempt <= 2; attempt++) {
-        try {
-          if (url.isEmpty) {
-            throw Exception('链接为空');
-          }
-          debugPrint(
-            '$_tracePrefix batch item ${i + 1}/${books.length} attempt $attempt: $url',
-          );
-          final result = await _bookService.downloadFile(
-            url: url,
-            password: _passwordController.text.trim(),
-            categoryFolderName: categoryDirName,
-            preferredBookTitle: title,
-            keepOriginalZip: false,
-            onProgress: (received, total) {
-              if (!mounted) return;
-              setState(() {
-                _batchCurrentTitle = title;
-                _downloadReceived = received;
-                _downloadTotal = total;
-              });
-            },
-          );
-          if (!mounted) return;
-          _printTrace(result.trace);
-          debugPrint('$_tracePrefix 下载源地址: $url');
-          debugPrint('$_tracePrefix 本地保存地址: ${result.filePath}');
-          setState(() {
-            _lastDownloadTrace = result.trace;
-          });
-          success = true;
-          break;
-        } catch (e) {
-          lastError = e;
-          if (_bookService.isDownloadSizeSkipped(e)) {
-            skippedOversized = true;
-            debugPrint(
-              '$_tracePrefix batch item ${i + 1}/${books.length} skipped oversized: $e',
-            );
-            break;
-          }
-          debugPrint(
-            '$_tracePrefix batch item ${i + 1}/${books.length} failed at attempt $attempt: $e',
-          );
-          if (attempt < 2) {
-            final retryDelay = _bookService.isCtfileLimitError(e)
-                ? const Duration(seconds: 20)
-                : const Duration(seconds: 2);
-            await Future.delayed(retryDelay);
-          }
+        _batchIndex = i + 1;
+        if (success) {
+          await _refreshDownloadedMarks();
         }
       }
 
       if (!mounted) return;
       setState(() {
-        _batchDone += 1;
-        if (success) {
-          _batchSuccess += 1;
-          _batchLogs.add('${i + 1}. 成功：$title');
-        } else if (skippedOversized) {
-          _batchSkipped += 1;
-          _batchLogs.add('${i + 1}. 跳过：$title（文件过大，上限 20MB）');
-          _downloadReceived = 0;
-          _downloadTotal = null;
-        } else {
-          _batchFailed += 1;
-          _batchLogs.add('${i + 1}. 失败：$title（$lastError）');
-        }
+        _isBatchDownloading = false;
+        _isBatchPaused = false;
+        _batchCurrentTitle = '';
+        _downloadReceived = 0;
+        _downloadTotal = null;
       });
-      if (success) {
-        await _refreshDownloadedMarks();
-      }
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _isBatchDownloading = false;
-      _batchCurrentTitle = '';
-      _downloadReceived = 0;
-      _downloadTotal = null;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '本页下载完成：成功 $_batchSuccess，失败 $_batchFailed，跳过 $_batchSkipped',
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '本页下载完成：成功 $_batchSuccess，失败 $_batchFailed，跳过 $_batchSkipped',
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      _batchLoopRunning = false;
+    }
   }
 
   String _downloadProgressLabel(String title, int received, int? total) {
@@ -421,46 +593,20 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
   }
 
   Future<void> _refreshDownloadedMarks() async {
-    final categoryDirName = _bookService.currentCategoryFolderName(
-      tags: _dushupaiTags,
-      selectedCategory: _selectedDushupaiCategory,
-      selectedType: _selectedDushupaiType,
-    );
-    final dir = await _bookService.resolveWritableDownloadDir(
-      subFolder: categoryDirName,
-    );
-    final files = dir.existsSync()
-        ? dir
-            .listSync()
-            .whereType<File>()
-            .map((f) => f.path)
-            .toList()
-        : <String>[];
-    final keys = <String>{};
-    for (final filePath in files) {
-      final base = filePath.split('/').last;
-      if (base.startsWith('.')) continue;
-      final noExt = base.contains('.')
-          ? base.substring(0, base.lastIndexOf('.'))
-          : base;
-      final key = _bookService.sanitizePathComponent(
-        _bookService.normalizeBookTitle(noExt.trim()),
-      );
-      if (key.isNotEmpty) {
-        keys.add(key);
-      }
-    }
+    final keyToPath = await _scannedDownloadedBookPaths();
     if (!mounted) return;
     setState(() {
-      _downloadedBookKeys = keys;
+      _downloadedBookKeys = keyToPath.keys.toSet();
       _catalog = _catalog.map((book) {
         final title = (book['title'] ?? '').trim();
         final key = _bookService.sanitizePathComponent(
           _bookService.normalizeBookTitle(title),
         );
+        final localPath = keyToPath[key];
         return {
           ...book,
-          'downloaded': (key.isNotEmpty && keys.contains(key)) ? '1' : '0',
+          'downloaded': localPath != null ? '1' : '0',
+          if (localPath != null) 'localPath': localPath,
         };
       }).toList();
     });
@@ -613,6 +759,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       isBookLoading: _isBookLoading,
       isDownloading: _isDownloading,
       isBatchDownloading: _isBatchDownloading,
+      isBatchPaused: _isBatchPaused,
       tags: _dushupaiTags,
       selectedCategory: _selectedDushupaiCategory,
       selectedType: _selectedDushupaiType,
@@ -642,8 +789,8 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
         setState(() => _selectedDushupaiPage += 1);
         _fetchDushupaiBooks();
       },
-      onDownloadCurrentPage: _downloadCurrentPageBooks,
-      onOpenBook: _openBookDetail,
+      onDownloadCurrentPage: _onDownloadButtonPressed,
+      onOpenBook: _onOpenBook,
       onRetry: () => _fetchDushupaiBooks(
         refreshTags: _dushupaiTags.isEmpty,
         selectFirstTag: _dushupaiTags.isEmpty,

@@ -42,6 +42,13 @@ class DownloadResult {
   final List<String> trace;
 }
 
+class DownloadPausedException implements Exception {
+  const DownloadPausedException();
+
+  @override
+  String toString() => '下载已暂停';
+}
+
 class CategoryCatalogDownloadResult {
   const CategoryCatalogDownloadResult({
     required this.bookCount,
@@ -78,6 +85,8 @@ class OnlineBookService {
   static DateTime? _lastCtfileDownloadCompletedAt;
   static const Duration _ctfileMinInterval = Duration(seconds: 15);
   static const Duration _httpConnectTimeout = Duration(seconds: 30);
+  http.Client? _activeDownloadClient;
+  bool _pauseRequested = false;
   static const Duration _httpIdleTimeout = Duration(seconds: 45);
   static const Duration _pageFetchTimeout = Duration(seconds: 15);
   static const int _maxDownloadSizeBytes = 20 * 1024 * 1024;
@@ -85,6 +94,8 @@ class OnlineBookService {
   static const String ctfileLimitErrorMessage =
       '城通网盘免费账号仅支持同时 1 个下载任务。'
       '请关闭浏览器或其他客户端中的城通下载，等待约 15 秒后再试。';
+
+  static const int _sourcePagesPerView = 2;
 
   Future<FetchBooksResult> fetchDushupaiBooks({
     required String category,
@@ -94,25 +105,44 @@ class OnlineBookService {
     bool includeTags = true,
   }) async {
     final safePage = page < 1 ? 1 : page;
-    final url = buildDushupaiListUrl(
-      type: type,
-      category: category.trim(),
-      page: safePage,
-      sourceUrl: sourceUrl,
-    );
-    try {
-      final resp = await http
-          .get(Uri.parse(url), headers: defaultHeaders())
-          .timeout(_pageFetchTimeout);
-      if (resp.statusCode != 200) {
-        throw Exception('读取失败：HTTP ${resp.statusCode}');
-      }
+    final startSourcePage = (safePage - 1) * _sourcePagesPerView + 1;
+    final catalog = <Map<String, String>>[];
+    final seen = <String>{};
+    var tags = const <Map<String, String>>[];
 
-      final html = decodeBody(resp);
-      return FetchBooksResult(
-        catalog: parseBookList(html, Uri.parse(url)),
-        tags: includeTags ? parseDushupaiTags(html) : const <Map<String, String>>[],
-      );
+    try {
+      for (var i = 0; i < _sourcePagesPerView; i++) {
+        final sourcePage = startSourcePage + i;
+        final url = buildDushupaiListUrl(
+          type: type,
+          category: category.trim(),
+          page: sourcePage,
+          sourceUrl: sourceUrl,
+        );
+        final resp = await http
+            .get(Uri.parse(url), headers: defaultHeaders())
+            .timeout(_pageFetchTimeout);
+        if (resp.statusCode != 200) {
+          throw Exception('读取失败：HTTP ${resp.statusCode}');
+        }
+
+        final html = decodeBody(resp);
+        if (includeTags && i == 0) {
+          tags = parseDushupaiTags(html);
+        }
+        final books = parseBookList(html, Uri.parse(url));
+        if (books.isEmpty) break;
+        for (final book in books) {
+          final key = (book['url'] ?? book['title'] ?? '').trim();
+          if (key.isEmpty || seen.contains(key)) continue;
+          seen.add(key);
+          catalog.add(book);
+        }
+        if (i + 1 < _sourcePagesPerView) {
+          await Future.delayed(const Duration(milliseconds: 150));
+        }
+      }
+      return FetchBooksResult(catalog: catalog, tags: tags);
     } on TimeoutException {
       throw Exception(
         '无法连接读书派（请求超时）。请检查网络，或稍后重试。',
@@ -392,25 +422,60 @@ class OnlineBookService {
     });
   }
 
+  void requestPause() {
+    _pauseRequested = true;
+    final client = _activeDownloadClient;
+    _activeDownloadClient = null;
+    client?.close();
+  }
+
+  void clearPause() {
+    _pauseRequested = false;
+  }
+
+  bool get isPauseRequested => _pauseRequested;
+
+  bool isDownloadPaused(Object error) {
+    return error is DownloadPausedException ||
+        error.toString().contains('下载已暂停');
+  }
+
+  void throwIfPaused() {
+    if (_pauseRequested) throw const DownloadPausedException();
+  }
+
+  Future<void> delayUnlessPaused(Duration duration) async {
+    const step = Duration(milliseconds: 200);
+    var left = duration;
+    while (left > Duration.zero) {
+      throwIfPaused();
+      final wait = left < step ? left : step;
+      await Future.delayed(wait);
+      left -= wait;
+    }
+    throwIfPaused();
+  }
+
   Future<T> _runSerializedCtfileDownload<T>(Future<T> Function() action) async {
     final previous = _ctfileDownloadGate;
     final release = Completer<void>();
     _ctfileDownloadGate = release.future;
     await previous;
 
-    final lastCompleted = _lastCtfileDownloadCompletedAt;
-    if (lastCompleted != null) {
-      final elapsed = DateTime.now().difference(lastCompleted);
-      final remaining = _ctfileMinInterval - elapsed;
-      if (remaining > Duration.zero) {
-        debugPrint(
-          '$_tracePrefix ctfile slot cooldown: wait ${remaining.inSeconds}s',
-        );
-        await Future.delayed(remaining);
-      }
-    }
-
     try {
+      throwIfPaused();
+      final lastCompleted = _lastCtfileDownloadCompletedAt;
+      if (lastCompleted != null) {
+        final elapsed = DateTime.now().difference(lastCompleted);
+        final remaining = _ctfileMinInterval - elapsed;
+        if (remaining > Duration.zero) {
+          debugPrint(
+            '$_tracePrefix ctfile slot cooldown: wait ${remaining.inSeconds}s',
+          );
+          await delayUnlessPaused(remaining);
+        }
+      }
+      throwIfPaused();
       return await action();
     } finally {
       _lastCtfileDownloadCompletedAt = DateTime.now();
@@ -805,16 +870,21 @@ class OnlineBookService {
     var received = 0;
     try {
       await for (final chunk in streamed.stream.timeout(_httpIdleTimeout)) {
+        throwIfPaused();
         builder.add(chunk);
         received += chunk.length;
         onProgress?.call(received, total);
       }
     } on TimeoutException {
+      throwIfPaused();
       throw TimeoutException(
         '下载中断：已收到 ${_formatByteSize(received)}/'
         '${total == null ? '?' : _formatByteSize(total)}，'
         '${_httpIdleTimeout.inSeconds}s 内无新数据',
       );
+    } catch (e) {
+      throwIfPaused();
+      rethrow;
     }
     return builder.takeBytes();
   }
@@ -835,12 +905,14 @@ class OnlineBookService {
     void Function(int received, int? total)? onProgress,
   }) async {
     final client = http.Client();
+    _activeDownloadClient = client;
     final trace = <String>[];
     void pushTrace(String message) {
       trace.add(message);
       debugPrint('$_tracePrefix $message');
     }
     try {
+      throwIfPaused();
       Uri current = Uri.parse(rawUrl);
       Uri? lastCtfileSourceUri;
       int http503Retry = 0;
@@ -911,14 +983,14 @@ class OnlineBookService {
                 }
                 current = refreshed;
               }
-              await Future.delayed(Duration(milliseconds: delayMs));
+              await delayUnlessPaused(Duration(milliseconds: delayMs));
               continue;
             }
           } else if (resp.statusCode == 503 && http503Retry < 3) {
             http503Retry += 1;
             final delayMs = <int>[800, 1500, 2500][http503Retry - 1];
             pushTrace('[$depth] 503 at $reqUri, retry same url (retry $http503Retry/3, wait ${delayMs}ms)');
-            await Future.delayed(Duration(milliseconds: delayMs));
+            await delayUnlessPaused(Duration(milliseconds: delayMs));
             continue;
           }
           pushTrace('[$depth] http ${resp.statusCode} at ${streamed.request?.url ?? current}');
@@ -956,7 +1028,7 @@ class OnlineBookService {
             pushTrace(
               '[$depth] ctfile limit page detected, wait ${delayMs}ms then refresh downurl (retry $limitPageRetry/5)',
             );
-            await Future.delayed(Duration(milliseconds: delayMs));
+            await delayUnlessPaused(Duration(milliseconds: delayMs));
             final refreshed = await _resolveCtfileByApi(lastCtfileSourceUri, client, password);
             if (refreshed != null) {
               pushTrace('[$depth] refreshed by limit page -> $refreshed');
@@ -987,7 +1059,13 @@ class OnlineBookService {
         current = next;
       }
       throw Exception('下载链接解析层级过深，可能需要手动打开网页下载');
+    } catch (e) {
+      throwIfPaused();
+      rethrow;
     } finally {
+      if (identical(_activeDownloadClient, client)) {
+        _activeDownloadClient = null;
+      }
       client.close();
     }
   }

@@ -80,4 +80,29 @@ class DownloadBooksPaths {
 
   static Future<Directory> importDirectory() =>
       ensureDirectory(importFolderName);
+
+  /// 打开文件所在文件夹，并选中该文件。
+  static Future<void> revealFile(String filePath) async {
+    final file = File(filePath);
+    if (!file.existsSync()) {
+      throw Exception('文件不存在：$filePath');
+    }
+    if (Platform.isMacOS) {
+      final result = await Process.run('open', ['-R', filePath]);
+      if (result.exitCode != 0) {
+        final err = result.stderr.toString().trim();
+        throw Exception(err.isEmpty ? '无法在访达中显示文件' : err);
+      }
+      return;
+    }
+    if (Platform.isWindows) {
+      await Process.run('explorer', ['/select,', filePath]);
+      return;
+    }
+    final result = await Process.run('xdg-open', [p.dirname(filePath)]);
+    if (result.exitCode != 0) {
+      final err = result.stderr.toString().trim();
+      throw Exception(err.isEmpty ? '无法打开文件夹' : err);
+    }
+  }
 }
