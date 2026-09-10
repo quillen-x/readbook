@@ -32,6 +32,9 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
   int _batchFailed = 0;
   int _batchSkipped = 0;
   String _batchCurrentTitle = '';
+  String _downloadTitle = '';
+  int _downloadReceived = 0;
+  int? _downloadTotal;
   List<String> _batchLogs = [];
   String _batchLabel = '批量下载';
   Set<String> _downloadedBookKeys = <String>{};
@@ -193,7 +196,12 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       return;
     }
 
-    setState(() => _isDownloading = true);
+    setState(() {
+      _isDownloading = true;
+      _downloadTitle = title.isNotEmpty ? title : '下载中';
+      _downloadReceived = 0;
+      _downloadTotal = null;
+    });
     onStatusChange?.call('正在解析下载链接...');
     try {
       debugPrint('$_tracePrefix start download: $url');
@@ -210,6 +218,12 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
         preferredBookTitle: preferredBookTitle,
         keepOriginalZip: false,
         onProgress: (received, total) {
+          if (mounted) {
+            setState(() {
+              _downloadReceived = received;
+              _downloadTotal = total;
+            });
+          }
           onStatusChange?.call(
             _downloadProgressLabel(preferredBookTitle ?? '下载中', received, total),
           );
@@ -228,17 +242,32 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
         SnackBar(content: Text('下载完成：${result.filePath}')),
       );
     } catch (e) {
-      onStatusChange?.call('下载失败');
-      if (!mounted) return;
-      _printTrace(_lastDownloadTrace);
-      debugPrint('$_tracePrefix failed: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('下载失败：$e')),
-      );
+      if (_bookService.isDownloadSizeSkipped(e)) {
+        onStatusChange?.call('已跳过');
+        if (!mounted) return;
+        _printTrace(_lastDownloadTrace);
+        debugPrint('$_tracePrefix skipped oversized file: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e')),
+        );
+      } else {
+        onStatusChange?.call('下载失败');
+        if (!mounted) return;
+        _printTrace(_lastDownloadTrace);
+        debugPrint('$_tracePrefix failed: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('下载失败：$e')),
+        );
+      }
     } finally {
       onStatusChange?.call(null);
       if (mounted) {
-        setState(() => _isDownloading = false);
+        setState(() {
+          _isDownloading = false;
+          _downloadTitle = '';
+          _downloadReceived = 0;
+          _downloadTotal = null;
+        });
       }
     }
   }
@@ -260,6 +289,8 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       _batchFailed = 0;
       _batchSkipped = 0;
       _batchCurrentTitle = '';
+      _downloadReceived = 0;
+      _downloadTotal = null;
       _batchLogs = [];
     });
 
@@ -282,6 +313,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       }
 
       var success = false;
+      var skippedOversized = false;
       Object? lastError;
       for (var attempt = 1; attempt <= 2; attempt++) {
         try {
@@ -300,7 +332,9 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
             onProgress: (received, total) {
               if (!mounted) return;
               setState(() {
-                _batchCurrentTitle = _downloadProgressLabel(title, received, total);
+                _batchCurrentTitle = title;
+                _downloadReceived = received;
+                _downloadTotal = total;
               });
             },
           );
@@ -315,6 +349,13 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
           break;
         } catch (e) {
           lastError = e;
+          if (_bookService.isDownloadSizeSkipped(e)) {
+            skippedOversized = true;
+            debugPrint(
+              '$_tracePrefix batch item ${i + 1}/${books.length} skipped oversized: $e',
+            );
+            break;
+          }
           debugPrint(
             '$_tracePrefix batch item ${i + 1}/${books.length} failed at attempt $attempt: $e',
           );
@@ -333,6 +374,11 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
         if (success) {
           _batchSuccess += 1;
           _batchLogs.add('${i + 1}. 成功：$title');
+        } else if (skippedOversized) {
+          _batchSkipped += 1;
+          _batchLogs.add('${i + 1}. 跳过：$title（文件过大，上限 20MB）');
+          _downloadReceived = 0;
+          _downloadTotal = null;
         } else {
           _batchFailed += 1;
           _batchLogs.add('${i + 1}. 失败：$title（$lastError）');
@@ -347,6 +393,8 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     setState(() {
       _isBatchDownloading = false;
       _batchCurrentTitle = '';
+      _downloadReceived = 0;
+      _downloadTotal = null;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -576,6 +624,9 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       batchFailed: _batchFailed,
       batchSkipped: _batchSkipped,
       batchCurrentTitle: _batchCurrentTitle,
+      downloadTitle: _downloadTitle,
+      downloadReceived: _downloadReceived,
+      downloadTotal: _downloadTotal,
       batchLogs: _batchLogs,
       batchLabel: _batchLabel,
       errorText: _error,

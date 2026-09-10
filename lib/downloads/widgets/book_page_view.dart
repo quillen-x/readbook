@@ -24,6 +24,9 @@ class BookPageView extends StatelessWidget {
     required this.batchFailed,
     required this.batchSkipped,
     required this.batchCurrentTitle,
+    required this.downloadTitle,
+    required this.downloadReceived,
+    this.downloadTotal,
     required this.batchLogs,
     required this.errorText,
     required this.catalog,
@@ -54,6 +57,9 @@ class BookPageView extends StatelessWidget {
   final int batchFailed;
   final int batchSkipped;
   final String batchCurrentTitle;
+  final String downloadTitle;
+  final int downloadReceived;
+  final int? downloadTotal;
   final List<String> batchLogs;
   final String? errorText;
   final List<Map<String, String>> catalog;
@@ -97,11 +103,11 @@ class BookPageView extends StatelessWidget {
     final textStyles = context.appText;
 
     return SizedBox(
-      width: 120.w,
+      width: 140.w,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (isLoading || isBookLoading || isDownloading || isBatchDownloading)
+          if (isLoading || isBookLoading)
             Padding(
               padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
               child: LinearProgressIndicator(
@@ -248,14 +254,12 @@ class BookPageView extends StatelessWidget {
                           : Text('暂无数据', style: textStyles.sidebarEmpty),
                 )
               : GridView.builder(
-                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 36.h),
-                  gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: gridBookCoverMaxExtentScaled(),
-                    mainAxisSpacing: 14.h,
-                    crossAxisSpacing: 14.w,
-                    childAspectRatio: bookCoverGridChildAspectRatio(
-                      gridBookCoverMaxExtentScaled(),
-                    ),
+                  padding: EdgeInsets.fromLTRB(12.w, 20.h, 8.w, 20.h),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 4,
+                    mainAxisSpacing: 12.h,
+                    crossAxisSpacing: 10.w,
+                    childAspectRatio: kBookCoverAspectRatio,
                   ),
                   itemCount: catalog.length,
                   itemBuilder: (_, i) => _buildBookCard(catalog[i]),
@@ -281,9 +285,11 @@ class BookPageView extends StatelessWidget {
   Widget _buildBatchProgress(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textStyles = context.appText;
+    final showCurrentProgress = isBatchDownloading && batchCurrentTitle.isNotEmpty;
 
     return Container(
-      padding: EdgeInsets.fromLTRB(12.w, 8.h, 12.w, 8.h),
+      padding: EdgeInsets.fromLTRB(16.w, 14.h, 16.w, 14.h),
+      constraints: BoxConstraints(minHeight: 120.h),
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerLow,
         border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
@@ -291,25 +297,40 @@ class BookPageView extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (isBatchDownloading)
-            LinearProgressIndicator(
-              minHeight: 4.h,
-              color: colorScheme.primary,
-              backgroundColor: colorScheme.surfaceContainerHighest,
-            ),
-          if (isBatchDownloading) SizedBox(height: 6.h),
           Text(
-            '$batchLabel：$batchDone/$batchTotal，成功 $batchSuccess，失败 $batchFailed，跳过 $batchSkipped'
-            '${batchCurrentTitle.isNotEmpty ? '，当前：$batchCurrentTitle' : ''}',
+            '$batchLabel：$batchDone/$batchTotal，成功 $batchSuccess，失败 $batchFailed，跳过 $batchSkipped',
             style: textStyles.batchProgress,
           ),
-          if (batchLogs.isNotEmpty)
+          if (showCurrentProgress) ...[
+            SizedBox(height: 10.h),
+            Text(
+              _downloadProgressText(
+                title: batchCurrentTitle,
+                received: downloadReceived,
+                total: downloadTotal,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: textStyles.bottomBarMeta.copyWith(height: 1.35),
+            ),
+          ],
+          if (batchLogs.isNotEmpty) ...[
+            SizedBox(height: 10.h),
             SizedBox(
-              height: 56.h,
+              height: 96.h,
               child: ListView(
-                children: batchLogs.take(6).toList().reversed.map((e) => Text(e, style: textStyles.batchLog)).toList(),
+                children: batchLogs
+                    .take(8)
+                    .toList()
+                    .reversed
+                    .map((e) => Padding(
+                          padding: EdgeInsets.only(bottom: 4.h),
+                          child: Text(e, style: textStyles.batchLog),
+                        ))
+                    .toList(),
               ),
             ),
+          ],
         ],
       ),
     );
@@ -324,6 +345,7 @@ class BookPageView extends StatelessWidget {
         !isBatchDownloading &&
         !isDownloading &&
         catalog.isNotEmpty;
+    final showDownloadProgress = isDownloading && !isBatchDownloading;
 
     return Container(
       padding: EdgeInsets.fromLTRB(12.w, 8.h, 12.w, 8.h),
@@ -331,37 +353,83 @@ class BookPageView extends StatelessWidget {
         color: colorScheme.surfaceContainerLow,
         border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          FilledButton.tonalIcon(
-            onPressed: canBatch ? onDownloadCurrentPage : null,
-            icon: Icon(
-              isBatchDownloading
-                  ? Icons.hourglass_top_rounded
-                  : Icons.download_rounded,
-              size: 16.sp,
-            ),
-            label: Text(
-              isBatchDownloading ? '下载中...' : '下载本页',
-              style: textStyles.bottomBarMeta.copyWith(
-                color: canBatch
-                    ? colorScheme.onSecondaryContainer
-                    : colorScheme.onSurface.withValues(alpha: 0.38),
-                fontWeight: FontWeight.w600,
+          if (showDownloadProgress) ...[
+            Text(
+              _downloadProgressText(
+                title: downloadTitle,
+                received: downloadReceived,
+                total: downloadTotal,
               ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: textStyles.bottomBarMeta,
             ),
-            style: FilledButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-              minimumSize: Size(0, 32.h),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
+            SizedBox(height: 8.h),
+          ],
+          Row(
+            children: [
+              FilledButton.tonalIcon(
+                onPressed: canBatch ? onDownloadCurrentPage : null,
+                icon: Icon(
+                  isBatchDownloading
+                      ? Icons.hourglass_top_rounded
+                      : Icons.download_rounded,
+                  size: 16.sp,
+                ),
+                label: Text(
+                  isBatchDownloading ? '下载中...' : '下载本页',
+                  style: textStyles.bottomBarMeta.copyWith(
+                    color: canBatch
+                        ? colorScheme.onSecondaryContainer
+                        : colorScheme.onSurface.withValues(alpha: 0.38),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  minimumSize: Size(0, 32.h),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+              const Spacer(),
+              _buildPager(context, canPrev: canPrev, canNext: canNext),
+            ],
           ),
-          const Spacer(),
-          _buildPager(context, canPrev: canPrev, canNext: canNext),
         ],
       ),
     );
+  }
+
+  String _downloadProgressText({
+    required String title,
+    required int received,
+    required int? total,
+  }) {
+    final sizeText = total != null && total > 0
+        ? '${_formatByteSize(received)} / ${_formatByteSize(total)}'
+        : _formatByteSize(received);
+    if (total != null && total > 0) {
+      final pct = ((received / total) * 100).clamp(0, 100).toStringAsFixed(0);
+      final name = title.isNotEmpty ? title : '下载中';
+      return '$name · $pct% · $sizeText';
+    }
+    final name = title.isNotEmpty ? title : '下载中';
+    return received > 0 ? '$name · $sizeText' : name;
+  }
+
+  String _formatByteSize(int n) {
+    if (n >= 1024 * 1024) {
+      return '${(n / (1024 * 1024)).toStringAsFixed(1)}MB';
+    }
+    if (n >= 1024) {
+      return '${(n / 1024).toStringAsFixed(0)}KB';
+    }
+    return '${n}B';
   }
 
   Widget _buildPager(

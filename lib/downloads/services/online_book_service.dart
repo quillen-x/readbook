@@ -80,6 +80,7 @@ class OnlineBookService {
   static const Duration _httpConnectTimeout = Duration(seconds: 30);
   static const Duration _httpIdleTimeout = Duration(seconds: 45);
   static const Duration _pageFetchTimeout = Duration(seconds: 15);
+  static const int _maxDownloadSizeBytes = 20 * 1024 * 1024;
 
   static const String ctfileLimitErrorMessage =
       '城通网盘免费账号仅支持同时 1 个下载任务。'
@@ -733,6 +734,9 @@ class OnlineBookService {
         int.tryParse(streamed.headers['content-length'] ?? '') ??
         _fileSizeFromCdnUri(streamed.request?.url);
     pushTrace('$label http ${streamed.statusCode} ct=$contentType len=${total ?? '?'}');
+    if (total != null) {
+      _ensureDownloadSizeAllowed(total, label: label, pushTrace: pushTrace);
+    }
 
     final reportProgress = _shouldReportDownloadProgress(
       statusCode: streamed.statusCode,
@@ -756,6 +760,7 @@ class OnlineBookService {
             }
           : null,
     );
+    _ensureDownloadSizeAllowed(bytes.length, label: label, pushTrace: pushTrace);
     return http.Response.bytes(
       bytes,
       streamed.statusCode,
@@ -1259,6 +1264,26 @@ class OnlineBookService {
     return message.contains('最大下载任务数') ||
         message.contains('单任务下载') ||
         message.contains(ctfileLimitErrorMessage);
+  }
+
+  bool isDownloadSizeSkipped(Object error) {
+    return error.toString().contains('文件过大');
+  }
+
+  Exception _downloadSizeSkippedException(int sizeBytes) {
+    return Exception(
+      '文件过大（${_formatByteSize(sizeBytes)}），已跳过（上限 ${_formatByteSize(_maxDownloadSizeBytes)}）',
+    );
+  }
+
+  void _ensureDownloadSizeAllowed(
+    int sizeBytes, {
+    required String label,
+    required void Function(String message) pushTrace,
+  }) {
+    if (sizeBytes <= _maxDownloadSizeBytes) return;
+    pushTrace('$label skip oversized file: ${_formatByteSize(sizeBytes)}');
+    throw _downloadSizeSkippedException(sizeBytes);
   }
 
   bool _looksLikeStrictBookFileUri(Uri uri) {
