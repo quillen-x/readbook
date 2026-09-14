@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/app_providers.dart';
 import '../utils/download_books_paths.dart';
 import 'services/online_book_service.dart';
+import 'services/sobooks_service.dart';
 import 'widgets/book_detail_dialog.dart';
 import 'widgets/book_page_view.dart';
 
@@ -20,6 +21,9 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
   final TextEditingController _passwordController =
       TextEditingController(text: '8866');
   final OnlineBookService _bookService = OnlineBookService();
+  final SobooksService _sobooks = SobooksService();
+  String _source = 'dushupai';
+  final Map<String, _SourceSnapshot> _sourceSnapshots = {};
 
   bool _isLoading = false;
   bool _isBookLoading = false;
@@ -62,7 +66,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       _selectedDushupaiTagUrl =
           'https://www.dushupai.com/book-category-xiaoshuo.html';
       _selectedDushupaiPage = 1;
-      _fetchDushupaiBooks(refreshTags: true, selectFirstTag: true);
+      _fetchCurrentBooks(refreshTags: true, selectFirstTag: true);
     });
   }
 
@@ -77,6 +81,137 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     final text = error.toString();
     const prefix = 'Exception: ';
     return text.startsWith(prefix) ? text.substring(prefix.length) : text;
+  }
+
+  bool get _isSobooks => _source == 'sobooks';
+
+  void _storeSourceState() {
+    _sourceSnapshots[_source] = _SourceSnapshot(
+      catalog: List<Map<String, String>>.from(_catalog),
+      tags: List<Map<String, String>>.from(_dushupaiTags),
+      selectedCategory: _selectedDushupaiCategory,
+      selectedType: _selectedDushupaiType,
+      selectedTagUrl: _selectedDushupaiTagUrl,
+      page: _selectedDushupaiPage,
+      error: _error,
+    );
+  }
+
+  void _restoreSourceState(String source) {
+    final snap = _sourceSnapshots[source];
+    if (snap == null) {
+      _catalog = [];
+      _dushupaiTags = source == 'sobooks'
+          ? List<Map<String, String>>.from(SobooksService.defaultTags)
+          : [];
+      _selectedDushupaiCategory = source == 'sobooks' ? 'latest' : 'xiaoshuo';
+      _selectedDushupaiType = 'category';
+      _selectedDushupaiTagUrl = source == 'sobooks'
+          ? '${SobooksService.siteOrigin}/'
+          : 'https://www.dushupai.com/book-category-xiaoshuo.html';
+      _selectedDushupaiPage = 1;
+      _error = null;
+      return;
+    }
+    _catalog = List<Map<String, String>>.from(snap.catalog);
+    _dushupaiTags = List<Map<String, String>>.from(snap.tags);
+    _selectedDushupaiCategory = snap.selectedCategory;
+    _selectedDushupaiType = snap.selectedType;
+    _selectedDushupaiTagUrl = snap.selectedTagUrl;
+    _selectedDushupaiPage = snap.page;
+    _error = snap.error;
+  }
+
+  Future<void> _switchSource(String source) async {
+    if (source == _source) return;
+    _storeSourceState();
+    setState(() {
+      _source = source;
+      _restoreSourceState(source);
+    });
+    if (_catalog.isEmpty) {
+      await _fetchCurrentBooks(
+        refreshTags: true,
+        selectFirstTag: source == 'sobooks',
+      );
+    } else {
+      await _refreshDownloadedMarks();
+    }
+  }
+
+  Future<void> _fetchCurrentBooks({
+    bool refreshTags = false,
+    bool selectFirstTag = false,
+  }) async {
+    if (_isSobooks) {
+      await _fetchSobooksBooks(
+        refreshTags: refreshTags,
+        selectFirstTag: selectFirstTag,
+      );
+      return;
+    }
+    await _fetchDushupaiBooks(
+      refreshTags: refreshTags,
+      selectFirstTag: selectFirstTag,
+    );
+  }
+
+  Future<void> _fetchSobooksBooks({
+    bool refreshTags = false,
+    bool selectFirstTag = false,
+  }) async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final result = await _sobooks.fetchBooks(
+        category: (_selectedDushupaiCategory ?? 'latest').trim(),
+        page: _selectedDushupaiPage,
+        sourceUrl: _selectedDushupaiTagUrl,
+        includeTags: refreshTags,
+      );
+
+      var reloadFirstTag = false;
+      setState(() {
+        if (refreshTags && result.tags.isNotEmpty) {
+          _dushupaiTags = result.tags;
+          final first = _dushupaiTags.first;
+          final firstSlug = first['slug'];
+          final firstType = first['type'] ?? 'category';
+          final firstUrl = first['url'];
+          final selectedInTags = _dushupaiTags.any(
+            (e) =>
+                e['slug'] == _selectedDushupaiCategory &&
+                (e['type'] ?? 'category') == _selectedDushupaiType,
+          );
+          final alreadyFirst = _selectedDushupaiCategory == firstSlug &&
+              _selectedDushupaiType == firstType &&
+              _selectedDushupaiTagUrl == firstUrl;
+          if (selectFirstTag || !selectedInTags) {
+            _selectedDushupaiCategory = firstSlug;
+            _selectedDushupaiType = firstType;
+            _selectedDushupaiTagUrl = firstUrl;
+            _selectedDushupaiPage = 1;
+            reloadFirstTag = !alreadyFirst;
+          }
+        }
+        if (!reloadFirstTag) {
+          _catalog = result.catalog;
+        }
+      });
+      if (reloadFirstTag) {
+        await _fetchSobooksBooks();
+        return;
+      }
+      await _refreshDownloadedMarks();
+    } catch (e) {
+      setState(() => _error = _formatFetchError(e));
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   Future<void> _fetchDushupaiBooks({
@@ -178,11 +313,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
   }
 
   Future<Map<String, String>> _scannedDownloadedBookPaths() async {
-    final categoryDirName = _bookService.currentCategoryFolderName(
-      tags: _dushupaiTags,
-      selectedCategory: _selectedDushupaiCategory,
-      selectedType: _selectedDushupaiType,
-    );
+    final categoryDirName = _currentFolderName();
     final dir = await _bookService.resolveWritableDownloadDir(
       subFolder: categoryDirName,
     );
@@ -227,7 +358,9 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     }
     try {
       final url = book['url'] ?? '';
-      final detail = await _bookService.fetchBookDetail(url);
+      final detail = _sobooks.isSobooksUrl(url)
+          ? await _sobooks.fetchBookDetail(url)
+          : await _bookService.fetchBookDetail(url);
       if (!mounted) return;
 
       await showDialog<void>(
@@ -292,15 +425,12 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     onStatusChange?.call('正在解析下载链接...');
     try {
       debugPrint('$_tracePrefix start download: $url');
-      final categoryDirName = _bookService.currentCategoryFolderName(
-        tags: _dushupaiTags,
-        selectedCategory: _selectedDushupaiCategory,
-        selectedType: _selectedDushupaiType,
-      );
+      final categoryDirName = _currentFolderName();
       onStatusChange?.call('正在下载文件，请稍候...');
+      final target = await _resolveDownloadTarget(url);
       final result = await _bookService.downloadFile(
-        url: url,
-        password: _passwordController.text.trim(),
+        url: target.url,
+        password: target.password,
         categoryFolderName: categoryDirName,
         preferredBookTitle: preferredBookTitle,
         keepOriginalZip: false,
@@ -395,11 +525,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     _bookService.clearPause();
     _batchBooks = List<Map<String, String>>.from(_catalog);
     _batchIndex = 0;
-    _batchCategoryDirName = _bookService.currentCategoryFolderName(
-      tags: _dushupaiTags,
-      selectedCategory: _selectedDushupaiCategory,
-      selectedType: _selectedDushupaiType,
-    );
+    _batchCategoryDirName = _currentFolderName();
     setState(() {
       _isBatchDownloading = true;
       _isBatchPaused = false;
@@ -470,9 +596,10 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
             debugPrint(
               '$_tracePrefix batch item ${i + 1}/${books.length} attempt $attempt: $url',
             );
+            final target = await _resolveDownloadTarget(url);
             final result = await _bookService.downloadFile(
-              url: url,
-              password: _passwordController.text.trim(),
+              url: target.url,
+              password: target.password,
               categoryFolderName: categoryDirName,
               preferredBookTitle: title,
               keepOriginalZip: false,
@@ -577,6 +704,53 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
     }
   }
 
+  String _currentFolderName() {
+    if (_isSobooks) {
+      final tag = _dushupaiTags.cast<Map<String, String>?>().firstWhere(
+            (e) =>
+                (e?['slug'] ?? '') == (_selectedDushupaiCategory ?? '') &&
+                (e?['type'] ?? 'category') == _selectedDushupaiType,
+            orElse: () => null,
+          );
+      final raw = (tag?['title'] ?? _selectedDushupaiCategory ?? '最新').trim();
+      final name = _bookService.sanitizePathComponent(
+        raw.replaceAll(RegExp(r'\s*\(\d+\)\s*$'), '').trim(),
+      );
+      return name.isEmpty ? 'SoBooks' : 'SoBooks-$name';
+    }
+    return _bookService.currentCategoryFolderName(
+      tags: _dushupaiTags,
+      selectedCategory: _selectedDushupaiCategory,
+      selectedType: _selectedDushupaiType,
+    );
+  }
+
+  Future<SobooksResolvedDownload> _resolveDownloadTarget(String url) async {
+    final lower = url.toLowerCase();
+    if (lower.contains('quark.cn') ||
+        lower.contains('pan.baidu.com') ||
+        lower.contains('aliyundrive.com') ||
+        lower.contains('alipan.com')) {
+      throw Exception('暂仅支持城通网盘自动下载，请改用城通链接');
+    }
+    if (_sobooks.isSobooksUrl(url)) {
+      return _sobooks.resolveCtfileDownload(url);
+    }
+    if (lower.contains('ctfile.com')) {
+      final uri = Uri.tryParse(url);
+      return SobooksResolvedDownload(
+        url: url,
+        password: uri?.queryParameters['pwd'] ??
+            uri?.queryParameters['p'] ??
+            _passwordController.text.trim(),
+      );
+    }
+    return SobooksResolvedDownload(
+      url: url,
+      password: _passwordController.text.trim(),
+    );
+  }
+
   String _downloadProgressLabel(String title, int received, int? total) {
     if (total != null && total > 0) {
       final pct = ((received / total) * 100).clamp(0, 100).toStringAsFixed(0);
@@ -631,7 +805,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       _selectedDushupaiTagUrl = tag['url'];
       _selectedDushupaiPage = 1;
     });
-    _fetchDushupaiBooks();
+    _fetchCurrentBooks();
   }
 
   String _tagDisplayName(Map<String, String> tag) {
@@ -640,6 +814,7 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
   }
 
   Future<void> _onTagLongPress(Map<String, String> tag) async {
+    if (_isSobooks) return;
     if (_isBatchDownloading || _isDownloading || _isLoading) return;
     final name = _tagDisplayName(tag);
     final confirmed = await showDialog<bool>(
@@ -778,23 +953,46 @@ class _OnlineBookListState extends ConsumerState<OnlineBookList> {
       batchLabel: _batchLabel,
       errorText: _error,
       catalog: _catalog,
+      selectedSource: _source,
+      onSourceChanged: _switchSource,
+      canTagLongPress: !_isSobooks,
       onTagTap: _onTagTap,
       onTagLongPress: _onTagLongPress,
       onPrevPage: () {
         if (_selectedDushupaiPage <= 1) return;
         setState(() => _selectedDushupaiPage -= 1);
-        _fetchDushupaiBooks();
+        _fetchCurrentBooks();
       },
       onNextPage: () {
         setState(() => _selectedDushupaiPage += 1);
-        _fetchDushupaiBooks();
+        _fetchCurrentBooks();
       },
       onDownloadCurrentPage: _onDownloadButtonPressed,
       onOpenBook: _onOpenBook,
-      onRetry: () => _fetchDushupaiBooks(
+      onRetry: () => _fetchCurrentBooks(
         refreshTags: _dushupaiTags.isEmpty,
         selectFirstTag: _dushupaiTags.isEmpty,
       ),
     );
   }
+}
+
+class _SourceSnapshot {
+  const _SourceSnapshot({
+    required this.catalog,
+    required this.tags,
+    required this.selectedCategory,
+    required this.selectedType,
+    required this.selectedTagUrl,
+    required this.page,
+    required this.error,
+  });
+
+  final List<Map<String, String>> catalog;
+  final List<Map<String, String>> tags;
+  final String? selectedCategory;
+  final String selectedType;
+  final String? selectedTagUrl;
+  final int page;
+  final String? error;
 }

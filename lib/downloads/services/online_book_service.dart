@@ -95,7 +95,7 @@ class OnlineBookService {
       '城通网盘免费账号仅支持同时 1 个下载任务。'
       '请关闭浏览器或其他客户端中的城通下载，等待约 15 秒后再试。';
 
-  static const int _sourcePagesPerView = 2;
+  static const int _sourcePagesPerView = 5;
 
   Future<FetchBooksResult> fetchDushupaiBooks({
     required String category,

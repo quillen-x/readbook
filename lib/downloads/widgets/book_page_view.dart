@@ -40,6 +40,9 @@ class BookPageView extends StatelessWidget {
     this.onRetry,
     this.cardBackgroundOpacity = 0.5,
     this.batchLabel = '批量下载',
+    this.selectedSource = 'dushupai',
+    this.onSourceChanged,
+    this.canTagLongPress = true,
   });
 
   final TextEditingController passwordController;
@@ -74,6 +77,9 @@ class BookPageView extends StatelessWidget {
   final VoidCallback? onRetry;
   final double cardBackgroundOpacity;
   final String batchLabel;
+  final String selectedSource;
+  final ValueChanged<String>? onSourceChanged;
+  final bool canTagLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -120,7 +126,8 @@ class BookPageView extends StatelessWidget {
                             selected: (tag['slug'] ?? '') == selectedCategory &&
                                 (tag['type'] ?? 'category') == selectedType,
                             enabled: !isLoading,
-                            canLongPress: !isLoading &&
+                            canLongPress: canTagLongPress &&
+                                !isLoading &&
                                 !isBatchDownloading &&
                                 !isDownloading,
                             onTap: (selected) {
@@ -152,6 +159,52 @@ class BookPageView extends StatelessWidget {
     );
   }
 
+  Widget _buildSourceTabs(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textStyles = context.appText;
+
+    Widget tab(String id, String label) {
+      final selected = selectedSource == id;
+      return Expanded(
+        child: InkWell(
+          onTap: onSourceChanged == null || selected
+              ? null
+              : () => onSourceChanged!(id),
+          child: Container(
+            padding: EdgeInsets.symmetric(vertical: 8.h),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected
+                  ? colorScheme.primaryContainer.withValues(alpha: 0.7)
+                  : Colors.transparent,
+              border: Border(
+                bottom: BorderSide(
+                  width: selected ? 2 : 1,
+                  color: selected
+                      ? colorScheme.primary
+                      : colorScheme.outlineVariant,
+                ),
+              ),
+            ),
+            child: Text(
+              label,
+              style: selected
+                  ? textStyles.sidebarTagSelected
+                  : textStyles.sidebarTag,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        tab('dushupai', '读书派'),
+        tab('sobooks', 'SoBooks'),
+      ],
+    );
+  }
+
   Widget _buildUnreachableState(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textStyles = context.appText;
@@ -168,7 +221,7 @@ class BookPageView extends StatelessWidget {
           ),
           SizedBox(height: 12.h),
           Text(
-            '读书派暂时无法访问',
+            selectedSource == 'sobooks' ? 'SoBooks 暂时无法访问' : '读书派暂时无法访问',
             style: textStyles.sidebarTagSelected.copyWith(
               color: colorScheme.onSurface,
             ),
@@ -199,6 +252,7 @@ class BookPageView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _buildSourceTabs(context),
         if (isLoading || isBookLoading)
           LinearProgressIndicator(
             minHeight: 2.h,
